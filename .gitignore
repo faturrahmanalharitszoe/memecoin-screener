@@ -1,0 +1,12 @@
+﻿__pycache__/
+*.pyc
+*.pyo
+snapshots/*.json
+!snapshots/.gitkeep
+dashboard.log
+dashboard_*.log
+dashboard_out.log
+dashboard_err.log
+.env
+venv/
+.venv/
