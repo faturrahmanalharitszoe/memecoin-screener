@@ -889,4 +889,5 @@ if __name__ == "__main__":
     print("Dashboard: http://localhost:5001")
     print("API: http://localhost:5001/api/screen/<mint>")
     print("="*60)
-    app.run(host="0.0.0.0", port=5001, debug=False, threaded=True, use_reloader=False)
+    port = int(os.getenv("PORT", 5001))
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True, use_reloader=False)
