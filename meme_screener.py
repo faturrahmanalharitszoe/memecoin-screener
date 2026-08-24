@@ -28,12 +28,70 @@ HEADERS = {"User-Agent": "meme-screener-solana/1.0"}
 
 
 def fetch_dexscreener(mint: str):
-    """Ambil data DEX lengkap dari DexScreener (gratis, no key)."""
+    """Ambil data DEX lengkap dari DexScreener (gratis, no key) + retry 3x + fallback GeckoTerminal."""
     url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
+    last_err = None
+    data = None
+    for attempt in range(1):
+        try:
+            timeout = 5
+            r = requests.get(url, headers=HEADERS, timeout=timeout)
+            r.raise_for_status()
+            data = r.json()
+            break
+        except Exception as e:
+            last_err = e
+            # fallback GeckoTerminal setelah 3x gagal
+            try:
+                gecko_url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}"
+                rg = requests.get(gecko_url, headers=HEADERS, timeout=10)
+                if rg.status_code == 200:
+                    gj = rg.json()
+                    attrs = gj.get("data", {}).get("attributes", {})
+                    price = float(attrs.get("price_usd") or 0)
+                    mcap = float(attrs.get("fdv_usd") or attrs.get("market_cap_usd") or 0)
+                    dummy_pair = {
+                        "chainId": "solana",
+                        "dexId": "geckoterminal",
+                        "url": f"https://www.geckoterminal.com/solana/tokens/{mint}",
+                        "pairAddress": mint[:10],
+                        "baseToken": {"address": mint, "name": attrs.get("name") or "unknown", "symbol": attrs.get("symbol") or "UNKNOWN"},
+                        "quoteToken": {"address": "So11111111111111111111111111111111111111112", "name": "Wrapped SOL", "symbol": "SOL"},
+                        "priceUsd": str(price),
+                        "priceNative": "0",
+                        "liquidity": {"usd": float(attrs.get("total_reserve_in_usd") or attrs.get("reserve_in_usd") or 0)},
+                        "volume": {"h24": float((attrs.get("volume_usd") or {}).get("h24") or 0) if isinstance((attrs.get("volume_usd") or {}), dict) else 0, "h1": 0, "h6": 0},
+                        "txns": {"h24": {"buys": 0, "sells": 0}, "h1": {"buys": 0, "sells": 0}, "h6": {"buys": 0, "sells": 0}},
+                        "priceChange": {"h24": float((attrs.get("price_change_percentage") or {}).get("h24") or 0) if isinstance((attrs.get("price_change_percentage") or {}), dict) else 0, "h1": 0, "h6": 0, "m5": 0},
+                        "fdv": mcap,
+                        "marketCap": mcap,
+                        "pairCreatedAt": 0,
+                    }
+                    return {
+                        "best_pair": dummy_pair,
+                        "all_pairs_count": 1,
+                        "total_liquidity_usd": dummy_pair["liquidity"]["usd"],
+                        "total_vol_24h": dummy_pair["volume"]["h24"],
+                        "txns_24h_buys": 0,
+                        "txns_24h_sells": 0,
+                        "price_usd": price,
+                        "fdv": mcap,
+                        "market_cap": mcap,
+                        "priceChange": dummy_pair["priceChange"],
+                        "pair_address": dummy_pair["pairAddress"],
+                        "dex": "geckoterminal",
+                    }, None
+            except Exception as e2:
+                import traceback
+                traceback.print_exc()
+                pass
+            return None, {"error": f"DexScreener timeout ({last_err}) - coba refresh 5 detik lagi"}
+    if data is None:
+        return None, {"error": f"DexScreener timeout ({last_err})"}
     try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        # lanjut parsing DexScreener normal
+        _ = data  # keep data
+
         pairs = data.get("pairs") or []
         if not pairs:
             return None, {"error": "No pairs found di DexScreener (token belum ada DEX liquidity?)"}

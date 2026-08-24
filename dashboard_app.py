@@ -72,7 +72,14 @@ def get_cached(key, fetch_fn, ttl=None):
     if key in CACHE and now - CACHE[key]["ts"] < ttl:
         return CACHE[key]["data"]
     data = fetch_fn()
-    CACHE[key] = {"ts": now, "data": data}
+    # cache error juga tapi cuma 5 detik biar tidak hammer DexScreener pas timeout
+    is_error = False
+    if isinstance(data, tuple) and len(data)==2 and data[0] is None:
+        is_error = True
+    if is_error:
+        CACHE[key] = {"ts": now - ttl + 5, "data": data}  # cache 5 detik saja untuk error
+    else:
+        CACHE[key] = {"ts": now, "data": data}
     return data
 
 def get_cached_ttl(key, ttl):
