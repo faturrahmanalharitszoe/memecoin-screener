@@ -15,6 +15,15 @@ import requests
 
 # Reuse logic dari meme_screener.py
 try:
+    from bagger import fetch_trending_solana, is_bagger_candidate
+    from whale_tracker import get_robinhood_wallets, analyze_whale_flow, get_bagger_whales
+    from paper_bot import paper_buy, paper_sell, get_portfolio
+except ImportError:
+    fetch_trending_solana = is_bagger_candidate = None
+    get_robinhood_wallets = analyze_whale_flow = get_bagger_whales = None
+    paper_buy = paper_sell = get_portfolio = None
+
+try:
     from meme_screener import (
         fetch_dexscreener,
         fetch_rugcheck,
@@ -393,6 +402,125 @@ def api_snapshot(mint):
     old, new = save_snapshot(mint, dex, rug)
     return jsonify({"old": old, "new": new})
 
+@app.route("/api/bagger")
+def api_bagger():
+    try:
+        from meme_screener import fetch_dexscreener, fetch_rugcheck, calculate_durability
+        from bagger import fetch_trending_solana, is_bagger_candidate
+        import time
+        trending = fetch_trending_solana(limit=20)
+        baggers = []
+        for tok in trending[:6]:  # limit 6 biar cepat, gak timeout
+            mint = tok["mint"]
+            try:
+                dex,_ = fetch_dexscreener(mint)
+                rug,_ = fetch_rugcheck(mint)
+                if not dex or not rug:
+                    continue
+                # social & durability
+                from dashboard_app import fetch_social_velocity, get_cached, CACHE_TTL_PRICE
+                # quick social
+                social = {"score": 50}
+                try:
+                    social = fetch_social_velocity(mint, dex, None)
+                except:
+                    pass
+                score, _, _ = calculate_durability(dex, rug, None)
+                is_bag, reason = is_bagger_candidate(dex, rug, social, score)
+                if is_bag:
+                    baggers.append({
+                        "mint": mint,
+                        "symbol": tok.get("symbol") or dex.get("best_pair",{}).get("baseToken",{}).get("symbol"),
+                        "name": tok.get("name"),
+                        "price": dex.get("price_usd"),
+                        "mcap": dex.get("market_cap"),
+                        "holders": rug.get("total_holders"),
+                        "top10": rug.get("top10_pct"),
+                        "score": score,
+                        "social": social.get("score"),
+                        "reason": reason,
+                        "dex": dex.get("dex"),
+                        "pairUrl": tok.get("pairUrl"),
+                    })
+                # small delay biar gak 429
+                time.sleep(0.1)
+            except Exception as e:
+                continue
+        return jsonify({"baggers": baggers, "scanned": len(trending), "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/whale/<mint>")
+def api_whale(mint):
+    try:
+        from meme_screener import fetch_rugcheck
+        from whale_tracker import analyze_whale_flow, get_bagger_whales, get_robinhood_wallets
+        rug,_ = fetch_rugcheck(mint.strip())
+        if not rug:
+            return jsonify({"error": "rugcheck fail"}), 400
+        flow = analyze_whale_flow(rug.get("top_holders", []))
+        whales = get_bagger_whales(mint, rug.get("top_holders", []))
+        robinhood = get_robinhood_wallets()
+        return jsonify({
+            "mint": mint,
+            "total_holders": rug.get("total_holders"),
+            "top10": rug.get("top10_pct"),
+            "flow": flow,
+            "whales": whales,
+            "robinhood_wallets": robinhood,
+            "holder_source": rug.get("holder_source"),
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/paper/portfolio")
+def api_paper_portfolio():
+    try:
+        from paper_bot import get_portfolio
+        return jsonify(get_portfolio())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/paper/buy", methods=["POST"])
+def api_paper_buy():
+    try:
+        data = request.get_json() or {}
+        mint = data.get("mint")
+        price = float(data.get("price") or 0)
+        symbol = data.get("symbol") or mint[:6]
+        size_pct = float(data.get("size_pct") or 2)
+        reason = data.get("reason") or "bagger"
+        if not mint or not price:
+            return jsonify({"error": "mint & price required"}), 400
+        from paper_bot import paper_buy
+        res = paper_buy(mint, symbol, price, size_pct, reason)
+        return jsonify(res)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/paper/sell", methods=["POST"])
+def api_paper_sell():
+    try:
+        data = request.get_json() or {}
+        mint = data.get("mint")
+        price = float(data.get("price") or 0)
+        pct = float(data.get("pct") or 100)
+        if not mint or not price:
+            return jsonify({"error": "mint & price required"}), 400
+        from paper_bot import paper_sell
+        res = paper_sell(mint, price, pct, "manual")
+        return jsonify(res)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/")
 def index():
     return HTML
@@ -434,7 +562,17 @@ HTML = r"""
   </div>
 </div>
 
+<div class="max-w-[1400px] mx-auto px-4 pt-4">
+  <div class="flex gap-2 overflow-x-auto">
+    <button onclick="showTab('screener')" id="tab-btn-screener" class="tab-btn active px-4 py-2 rounded-xl bg-violet-600 font-semibold text-sm whitespace-nowrap">🔍 Screener</button>
+    <button onclick="showTab('bagger')" id="tab-btn-bagger" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🚀 Bagger Hunter (Micin)</button>
+    <button onclick="showTab('whale')" id="tab-btn-whale" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🐋 Whale Tracker</button>
+    <button onclick="showTab('paper')" id="tab-btn-paper" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🤖 Based Bot (Paper)</button>
+  </div>
+</div>
 <div class="max-w-[1400px] mx-auto px-4 py-6 space-y-4">
+  <!-- SCREENER TAB -->
+  <div id="tab-screener">
   <!-- Input -->
   <div class="glass rounded-2xl p-4">
     <div class="flex flex-wrap gap-3 items-end">
@@ -621,6 +759,52 @@ HTML = r"""
     </div>
   </div>
 
+  </div> <!-- end screener -->
+  <!-- BAGGER TAB -->
+  <div id="tab-bagger" class="hidden space-y-4">
+    <div class="glass rounded-2xl p-5">
+      <div class="flex items-center justify-between">
+        <div><h3 class="font-bold">🚀 Bagger Hunter</h3><p class="text-xs text-white/50">Scan micin mcap $0.5M-50M, holder 500-50k, top10 &lt;35%, durability &gt;55, social &gt;65</p></div>
+        <button onclick="scanBagger()" id="btnBagger" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl font-semibold text-sm">🔍 Scan Bagger</button>
+      </div>
+      <div id="baggerStatus" class="text-xs text-white/50 mt-3"></div>
+      <div id="baggerList" class="mt-4 grid gap-3"></div>
+    </div>
+  </div>
+  <!-- WHALE TAB -->
+  <div id="tab-whale" class="hidden space-y-4">
+    <div class="glass rounded-2xl p-5">
+      <h3 class="font-bold">🐋 Whale Tracker</h3><p class="text-xs text-white/50">Track whale micin + Robinhood wallets (DOGE/SHIB/SOL). Masuk mint bagger di atas atau WIF/BONK.</p>
+      <div class="flex gap-3 mt-3">
+        <input id="whaleMint" placeholder="Paste mint..." class="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 mono text-sm" value="EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm">
+        <button onclick="trackWhale()" class="bg-violet-600 hover:bg-violet-500 px-5 py-3 rounded-xl font-semibold text-sm">Track</button>
+      </div>
+      <div id="whaleBox" class="mt-4 space-y-3"></div>
+      <div class="mt-4 p-3 bg-white/5 rounded-xl text-xs">
+        <p class="font-semibold">Robinhood known wallets (Arkham):</p>
+        <p id="robinhoodBox" class="mono text-[11px] text-white/60 mt-1">Loading...</p>
+      </div>
+    </div>
+  </div>
+  <!-- PAPER BOT TAB -->
+  <div id="tab-paper" class="hidden space-y-4">
+    <div class="glass rounded-2xl p-5">
+      <div class="flex items-center justify-between">
+        <div><h3 class="font-bold">🤖 Based Bot - Paper Trade</h3><p class="text-xs text-white/50">Paper $10k, siap real via Jupiter (PRIVATE_KEY). Auto TP 100% / SL -50%.</p></div>
+        <button onclick="loadPaper()" class="bg-white/5 border border-white/10 px-4 py-2 rounded-xl text-sm">Refresh</button>
+      </div>
+      <div id="paperStats" class="grid grid-cols-3 gap-3 mt-4"></div>
+      <div id="paperPositions" class="mt-4 space-y-2"></div>
+      <div id="paperTrades" class="mt-4 max-h-[300px] overflow-auto space-y-1 text-xs"></div>
+      <div class="mt-4 flex gap-2">
+        <input id="paperMint" placeholder="mint" class="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 mono text-xs">
+        <input id="paperPrice" placeholder="price" class="w-28 bg-white/5 border border-white/10 rounded-xl px-3 py-2 mono text-xs">
+        <button onclick="paperBuy()" class="bg-emerald-600 px-4 py-2 rounded-xl text-xs font-bold">Paper BUY 2%</button>
+        <button onclick="paperSell()" class="bg-red-600 px-4 py-2 rounded-xl text-xs font-bold">SELL 100%</button>
+      </div>
+      <p class="text-[11px] text-white/30 mt-2">Real trade: set env PRIVATE_KEY + uncomment Jupiter di paper_bot.py:real_trade_via_jupiter</p>
+    </div>
+  </div>
   <p class="text-center text-[11px] text-white/20 py-4">Bukan financial advice • Data: DexScreener + RugCheck + CoinGecko • 95% meme coin mati &lt;90 hari • Selalu cek holder, liquidity lock, whale concentration</p>
 </div>
 
@@ -657,6 +841,53 @@ function timeAgo(iso){
   }catch{ return ''; }
 }
 
+function showTab(name){
+  document.querySelectorAll('[id^="tab-"]').forEach(el=>el.classList.add('hidden'));
+  document.getElementById('tab-'+name).classList.remove('hidden');
+  document.querySelectorAll('.tab-btn').forEach(b=>{b.classList.remove('bg-violet-600'); b.classList.add('bg-white/5','border','border-white/10')});
+  document.getElementById('tab-btn-'+name).classList.add('bg-violet-600'); document.getElementById('tab-btn-'+name).classList.remove('bg-white/5','border','border-white/10');
+  if(name==='bagger' && !document.getElementById('baggerList').innerHTML) scanBagger();
+  if(name==='paper') loadPaper();
+  if(name==='whale') { document.getElementById('whaleMint').value = document.getElementById('mintInput').value; }
+}
+async function scanBagger(){
+  const btn=document.getElementById('btnBagger'); const status=document.getElementById('baggerStatus'); const list=document.getElementById('baggerList');
+  btn.disabled=true; btn.textContent='Scanning...'; status.textContent='Scan 12 trending micin, cek durability+social tiap token ~0.3s, total ~4s...';
+  list.innerHTML='<div class="text-center py-8 text-white/50">Scanning micin bagger...</div>';
+  try{
+    const r=await fetch('/api/bagger'); const j=await r.json();
+    if(j.error) throw new Error(j.error);
+    status.textContent=`Scanned ${j.scanned} trending, found ${j.baggers.length} bagger candidate`;
+    if(!j.baggers.length){ list.innerHTML='<div class="text-center py-8 text-white/30">Gak ada bagger hari ini - micin sepi atau udah pump</div>'; return; }
+    list.innerHTML=j.baggers.map(b=>`<div class="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-wrap gap-3 items-center justify-between">
+      <div><p class="font-bold mono">${b.symbol || b.mint.slice(0,6)} <span class="text-white/50 text-xs">${b.mint.slice(0,6)}...${b.mint.slice(-4)}</span></p><p class="text-xs mono">mcap $${(b.mcap||0).toLocaleString()} | holders ${b.holders?.toLocaleString()||'-'} | top10 ${b.top10?.toFixed(1)}% | score ${b.score} | social ${b.social}</p><p class="text-[11px] text-white/40 mt-1">${b.reason}</p></div>
+      <div class="flex gap-2"><a href="${b.pairUrl}" target="_blank" class="px-3 py-2 rounded-full bg-white/10 text-xs">Dex ↗</a><button onclick="document.getElementById('mintInput').value='${b.mint}'; showTab('screener'); doScreen();" class="px-3 py-2 rounded-full bg-violet-600 text-xs font-bold">Screen</button><button onclick="paperBuyFor('${b.mint}','${b.symbol||''}',${b.price||0})" class="px-3 py-2 rounded-full bg-emerald-600 text-xs font-bold">Paper BUY</button></div>
+    </div>`).join('');
+  }catch(e){ status.textContent='Error: '+e.message; }
+  finally{ btn.disabled=false; btn.textContent='🔍 Scan Bagger'; }
+}
+async function trackWhale(){
+  const mint=document.getElementById('whaleMint').value.trim(); if(!mint) return;
+  const box=document.getElementById('whaleBox'); box.innerHTML='Loading whale...';
+  try{
+    const r=await fetch('/api/whale/'+mint); const j=await r.json();
+    if(j.error) throw new Error(j.error);
+    box.innerHTML=`<div class="bg-white/5 rounded-xl p-3"><p class="text-xs">Holders ${j.total_holders?.toLocaleString()} | Top10 ${j.top10?.toFixed(1)}% | Source ${j.holder_source}</p><p class="text-xs mt-1">Flow: <span class="font-bold">${j.flow.signal}</span> - ${j.flow.details}</p><div class="mt-3 space-y-1">${j.whales.map(w=>`<div class="flex justify-between bg-white/5 rounded-lg px-3 py-2 mono text-xs"><span>${w.address.slice(0,6)}...${w.address.slice(-4)} ${w.is_robinhood?'[RH]':''}</span><span>${w.pct.toFixed(2)}%</span></div>`).join('') || '<span class="text-white/30">No whale >2%</span>'}</div></div>`;
+    document.getElementById('robinhoodBox').textContent = JSON.stringify(j.robinhood_wallets, null, 2).slice(0,400);
+  }catch(e){ box.innerHTML='Error: '+e.message; }
+}
+async function loadPaper(){
+  try{
+    const r=await fetch('/api/paper/portfolio'); const j=await r.json();
+    document.getElementById('paperStats').innerHTML=`<div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">BALANCE</p><p class="mono font-bold">$${j.balance_usd.toFixed(2)}</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">PNL</p><p class="mono font-bold ${j.total_pnl>=0?'text-emerald-400':'text-red-400'}">$${j.total_pnl.toFixed(2)}</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">WIN/LOSS</p><p class="mono font-bold">${j.win_trades}/${j.loss_trades}</p></div>`;
+    document.getElementById('paperPositions').innerHTML = Object.keys(j.positions).length ? Object.entries(j.positions).map(([mint,pos])=>`<div class="bg-white/5 rounded-xl p-3 flex justify-between items-center"><div><p class="mono font-bold text-xs">${pos.symbol} ${mint.slice(0,6)}... </p><p class="text-[11px] mono">${pos.amount.toFixed(2)} @ $${pos.entry_price.toFixed(6)} ($${pos.size_usd.toFixed(2)})</p></div><button onclick="paperSellFor('${mint}')" class="px-3 py-1 rounded-full bg-red-600 text-xs">SELL</button></div>`).join('') : '<p class="text-xs text-white/30">No positions - scan bagger & paper BUY</p>';
+    document.getElementById('paperTrades').innerHTML = j.trades.slice(-20).reverse().map(t=>`<div class="flex justify-between bg-white/5 rounded-lg px-3 py-1.5"><span class="${t.type==='BUY'?'text-emerald-400':'text-red-400'}">${t.type} ${t.symbol}</span><span class="mono">$${t.price?.toFixed(6)} x ${t.amount?.toFixed(2)} ${t.pnl!=null ? 'PNL $'+t.pnl.toFixed(2):''}</span><span class="text-white/30">${new Date(t.time).toLocaleTimeString()}</span></div>`).join('');
+  }catch(e){ console.error(e); }
+}
+async function paperBuy(){ const mint=document.getElementById('paperMint').value.trim(); const price=parseFloat(document.getElementById('paperPrice').value); if(!mint||!price) return alert('mint & price'); const r=await fetch('/api/paper/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price, symbol:mint.slice(0,6), size_pct:2})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }
+async function paperBuyFor(mint,symbol,price){ if(!price) { const p=prompt('price?'); price=parseFloat(p); } if(!price) return; const r=await fetch('/api/paper/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, symbol, price, size_pct:2})}); const j=await r.json(); if(j.error) alert(j.error); else { showTab('paper'); loadPaper(); } }
+async function paperSell(){ const mint=document.getElementById('paperMint').value.trim(); const price=parseFloat(document.getElementById('paperPrice').value); if(!mint||!price) return; const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price, pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }
+async function paperSellFor(mint){ const price=prompt('sell price?'); if(!price) return; const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price:parseFloat(price), pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }
 function setMint(m){ document.getElementById('mintInput').value=m; doScreen(); }
 
 async function doScreen(isAuto=false){
