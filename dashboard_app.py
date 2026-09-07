@@ -565,9 +565,8 @@ HTML = r"""
 <div class="max-w-[1400px] mx-auto px-4 pt-4">
   <div class="flex gap-2 overflow-x-auto">
     <button onclick="showTab('screener')" id="tab-btn-screener" class="tab-btn active px-4 py-2 rounded-xl bg-violet-600 font-semibold text-sm whitespace-nowrap">🔍 Screener</button>
-    <button onclick="showTab('bagger')" id="tab-btn-bagger" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🚀 Bagger Hunter (Micin)</button>
-    <button onclick="showTab('whale')" id="tab-btn-whale" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🐋 Whale Tracker</button>
-    <button onclick="showTab('paper')" id="tab-btn-paper" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🤖 Based Bot (Paper)</button>
+    <button onclick="showTab('bagger')" id="tab-btn-bagger" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🚀 Bagger Hunter + Bot</button>
+    <button onclick="showTab('whale')" id="tab-btn-whale" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🐋 Robinhood Whale (Micin)</button>
   </div>
 </div>
 <div class="max-w-[1400px] mx-auto px-4 py-6 space-y-4">
@@ -760,21 +759,30 @@ HTML = r"""
   </div>
 
   </div> <!-- end screener -->
-  <!-- BAGGER TAB -->
+  <!-- BAGGER TAB (with Based Bot) -->
   <div id="tab-bagger" class="hidden space-y-4">
     <div class="glass rounded-2xl p-5">
       <div class="flex items-center justify-between">
-        <div><h3 class="font-bold">🚀 Bagger Hunter</h3><p class="text-xs text-white/50">Scan micin mcap $0.5M-50M, holder 500-50k, top10 &lt;35%, durability &gt;55, social &gt;65</p></div>
+        <div><h3 class="font-bold">🚀 Bagger Hunter + Based Bot</h3><p class="text-xs text-white/50">Micin bagger + auto paper BUY 2% (TP 100% / SL -50%). Fokus Robinhood chain micin.</p></div>
         <button onclick="scanBagger()" id="btnBagger" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl font-semibold text-sm">🔍 Scan Bagger</button>
       </div>
       <div id="baggerStatus" class="text-xs text-white/50 mt-3"></div>
       <div id="baggerList" class="mt-4 grid gap-3"></div>
     </div>
+    <div class="glass rounded-2xl p-5">
+      <div class="flex items-center justify-between">
+        <div><h3 class="font-bold">🤖 Based Bot - Paper</h3><p class="text-xs text-white/50">Terhubung ke Bagger - klik Paper BUY di bagger buat entry. Saldo $10k paper, siap real Jupiter.</p></div>
+        <button onclick="loadPaper()" class="bg-white/5 border border-white/10 px-4 py-2 rounded-xl text-sm">Refresh</button>
+      </div>
+      <div id="paperStats" class="grid grid-cols-3 gap-3 mt-4"></div>
+      <div id="paperPositions" class="mt-4 space-y-2"></div>
+      <div id="paperTrades" class="mt-4 max-h-[300px] overflow-auto space-y-1 text-xs"></div>
+    </div>
   </div>
-  <!-- WHALE TAB -->
+  <!-- WHALE TAB - Robinhood Chain Focus -->
   <div id="tab-whale" class="hidden space-y-4">
     <div class="glass rounded-2xl p-5">
-      <h3 class="font-bold">🐋 Whale Tracker</h3><p class="text-xs text-white/50">Track whale micin + Robinhood wallets (DOGE/SHIB/SOL). Masuk mint bagger di atas atau WIF/BONK.</p>
+      <h3 class="font-bold">🐋 Robinhood Whale - Micin Chain</h3><p class="text-xs text-white/50">Fokus Robinhood listed micin: DOGE, SHIB, PEPE, BONK, WIF, FLOKI, BOME, POPCAT. Track whale wallet Robinhood di chain masing-masing.</p>
       <div class="flex gap-3 mt-3">
         <input id="whaleMint" placeholder="Paste mint..." class="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 mono text-sm" value="EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm">
         <button onclick="trackWhale()" class="bg-violet-600 hover:bg-violet-500 px-5 py-3 rounded-xl font-semibold text-sm">Track</button>
@@ -786,25 +794,7 @@ HTML = r"""
       </div>
     </div>
   </div>
-  <!-- PAPER BOT TAB -->
-  <div id="tab-paper" class="hidden space-y-4">
-    <div class="glass rounded-2xl p-5">
-      <div class="flex items-center justify-between">
-        <div><h3 class="font-bold">🤖 Based Bot - Paper Trade</h3><p class="text-xs text-white/50">Paper $10k, siap real via Jupiter (PRIVATE_KEY). Auto TP 100% / SL -50%.</p></div>
-        <button onclick="loadPaper()" class="bg-white/5 border border-white/10 px-4 py-2 rounded-xl text-sm">Refresh</button>
-      </div>
-      <div id="paperStats" class="grid grid-cols-3 gap-3 mt-4"></div>
-      <div id="paperPositions" class="mt-4 space-y-2"></div>
-      <div id="paperTrades" class="mt-4 max-h-[300px] overflow-auto space-y-1 text-xs"></div>
-      <div class="mt-4 flex gap-2">
-        <input id="paperMint" placeholder="mint" class="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 mono text-xs">
-        <input id="paperPrice" placeholder="price" class="w-28 bg-white/5 border border-white/10 rounded-xl px-3 py-2 mono text-xs">
-        <button onclick="paperBuy()" class="bg-emerald-600 px-4 py-2 rounded-xl text-xs font-bold">Paper BUY 2%</button>
-        <button onclick="paperSell()" class="bg-red-600 px-4 py-2 rounded-xl text-xs font-bold">SELL 100%</button>
-      </div>
-      <p class="text-[11px] text-white/30 mt-2">Real trade: set env PRIVATE_KEY + uncomment Jupiter di paper_bot.py:real_trade_via_jupiter</p>
-    </div>
-  </div>
+
   <p class="text-center text-[11px] text-white/20 py-4">Bukan financial advice • Data: DexScreener + RugCheck + CoinGecko • 95% meme coin mati &lt;90 hari • Selalu cek holder, liquidity lock, whale concentration</p>
 </div>
 
@@ -846,8 +836,7 @@ function showTab(name){
   document.getElementById('tab-'+name).classList.remove('hidden');
   document.querySelectorAll('.tab-btn').forEach(b=>{b.classList.remove('bg-violet-600'); b.classList.add('bg-white/5','border','border-white/10')});
   document.getElementById('tab-btn-'+name).classList.add('bg-violet-600'); document.getElementById('tab-btn-'+name).classList.remove('bg-white/5','border','border-white/10');
-  if(name==='bagger' && !document.getElementById('baggerList').innerHTML) scanBagger();
-  if(name==='paper') loadPaper();
+  if(name==='bagger'){ if(!document.getElementById('baggerList').innerHTML) scanBagger(); loadPaper(); }
   if(name==='whale') { document.getElementById('whaleMint').value = document.getElementById('mintInput').value; }
 }
 async function scanBagger(){
