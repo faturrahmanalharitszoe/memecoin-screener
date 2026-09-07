@@ -18,30 +18,43 @@ def fetch_trending_solana(limit=15):
         return TRENDING_CACHE["data"]
     
     tokens = []
-    # 1. DexScreener trending Solana
+    # 1. DexScreener trending All-Chain (Solana, ETH, BSC, Base, Robinhood chain)
     try:
-        r = requests.get("https://api.dexscreener.com/latest/dex/search/?q=SOL", headers=HEADERS, timeout=10)
-        if r.status_code == 200:
-            j = r.json()
-            pairs = j.get("pairs", [])[:50]
-            # Filter Solana chain dan sort by volume
-            sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
-            # Ambil unique mints dengan volume tertinggi
-            seen = set()
-            for p in sorted(sol_pairs, key=lambda x: (x.get("volume", {}).get("h24") or 0), reverse=True):
-                mint = p.get("baseToken", {}).get("address")
-                if mint and mint not in seen and len(tokens) < limit:
-                    seen.add(mint)
-                    tokens.append({
-                        "mint": mint,
-                        "symbol": p.get("baseToken", {}).get("symbol"),
-                        "name": p.get("baseToken", {}).get("name"),
-                        "priceUsd": p.get("priceUsd"),
-                        "volume24h": p.get("volume", {}).get("h24"),
-                        "liquidity": p.get("liquidity", {}).get("usd"),
-                        "fdv": p.get("fdv"),
-                        "pairUrl": p.get("url"),
-                    })
+        # Coba trending all-chain dulu, fallback ke search SOL
+        trending_urls = [
+            "https://api.dexscreener.com/latest/dex/search/?q=PEPE",
+            "https://api.dexscreener.com/latest/dex/search/?q=DOGE",
+            "https://api.dexscreener.com/latest/dex/search/?q=SOL",
+        ]
+        all_pairs = []
+        for turl in trending_urls:
+            try:
+                r = requests.get(turl, headers=HEADERS, timeout=8)
+                if r.status_code == 200:
+                    j = r.json()
+                    all_pairs.extend(j.get("pairs", [])[:30])
+            except:
+                continue
+        # Filter: ambil semua chain, sort by volume
+        seen = set()
+        for p in sorted(all_pairs, key=lambda x: (x.get("volume", {}).get("h24") or 0), reverse=True):
+            mint = p.get("baseToken", {}).get("address")
+            chain = p.get("chainId")
+            # key unik mint+chain biar gak duplikat lintas chain
+            key = f"{chain}:{mint}"
+            if mint and key not in seen and len(tokens) < limit:
+                seen.add(key)
+                tokens.append({
+                    "mint": mint,
+                    "chain": chain,
+                    "symbol": p.get("baseToken", {}).get("symbol"),
+                    "name": p.get("baseToken", {}).get("name"),
+                    "priceUsd": p.get("priceUsd"),
+                    "volume24h": p.get("volume", {}).get("h24"),
+                    "liquidity": p.get("liquidity", {}).get("usd"),
+                    "fdv": p.get("fdv"),
+                    "pairUrl": p.get("url"),
+                })
     except Exception as e:
         print(f"[BAGGER] DexScreener trending fail {e}")
     

@@ -565,8 +565,7 @@ HTML = r"""
 <div class="max-w-[1400px] mx-auto px-4 pt-4">
   <div class="flex gap-2 overflow-x-auto">
     <button onclick="showTab('screener')" id="tab-btn-screener" class="tab-btn active px-4 py-2 rounded-xl bg-violet-600 font-semibold text-sm whitespace-nowrap">🔍 Screener</button>
-    <button onclick="showTab('bagger')" id="tab-btn-bagger" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🚀 Bagger Hunter + Bot</button>
-    <button onclick="showTab('whale')" id="tab-btn-whale" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🐋 Robinhood Whale (Micin)</button>
+    <button onclick="showTab('bagger')" id="tab-btn-bagger" class="tab-btn px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm whitespace-nowrap">🚀 Bagger Hunter + Bot (All Chain)</button>
   </div>
 </div>
 <div class="max-w-[1400px] mx-auto px-4 py-6 space-y-4">
@@ -763,7 +762,7 @@ HTML = r"""
   <div id="tab-bagger" class="hidden space-y-4">
     <div class="glass rounded-2xl p-5">
       <div class="flex items-center justify-between">
-        <div><h3 class="font-bold">🚀 Bagger Hunter + Based Bot</h3><p class="text-xs text-white/50">Micin bagger + auto paper BUY 2% (TP 100% / SL -50%). Fokus Robinhood chain micin.</p></div>
+        <div><h3 class="font-bold">🚀 Bagger Hunter + Based Bot (All Chain)</h3><p class="text-xs text-white/50">Scan all-chain micin bagger (Solana, ETH, BSC, Base, Robinhood chain) + auto paper BUY 2%.</p></div>
         <button onclick="scanBagger()" id="btnBagger" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl font-semibold text-sm">🔍 Scan Bagger</button>
       </div>
       <div id="baggerStatus" class="text-xs text-white/50 mt-3"></div>
@@ -779,22 +778,6 @@ HTML = r"""
       <div id="paperTrades" class="mt-4 max-h-[300px] overflow-auto space-y-1 text-xs"></div>
     </div>
   </div>
-  <!-- WHALE TAB - Robinhood Chain Focus -->
-  <div id="tab-whale" class="hidden space-y-4">
-    <div class="glass rounded-2xl p-5">
-      <h3 class="font-bold">🐋 Robinhood Whale - Micin Chain</h3><p class="text-xs text-white/50">Fokus Robinhood listed micin: DOGE, SHIB, PEPE, BONK, WIF, FLOKI, BOME, POPCAT. Track whale wallet Robinhood di chain masing-masing.</p>
-      <div class="flex gap-3 mt-3">
-        <input id="whaleMint" placeholder="Paste mint..." class="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 mono text-sm" value="EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm">
-        <button onclick="trackWhale()" class="bg-violet-600 hover:bg-violet-500 px-5 py-3 rounded-xl font-semibold text-sm">Track</button>
-      </div>
-      <div id="whaleBox" class="mt-4 space-y-3"></div>
-      <div class="mt-4 p-3 bg-white/5 rounded-xl text-xs">
-        <p class="font-semibold">Robinhood known wallets (Arkham):</p>
-        <p id="robinhoodBox" class="mono text-[11px] text-white/60 mt-1">Loading...</p>
-      </div>
-    </div>
-  </div>
-
   <p class="text-center text-[11px] text-white/20 py-4">Bukan financial advice • Data: DexScreener + RugCheck + CoinGecko • 95% meme coin mati &lt;90 hari • Selalu cek holder, liquidity lock, whale concentration</p>
 </div>
 
@@ -837,7 +820,6 @@ function showTab(name){
   document.querySelectorAll('.tab-btn').forEach(b=>{b.classList.remove('bg-violet-600'); b.classList.add('bg-white/5','border','border-white/10')});
   document.getElementById('tab-btn-'+name).classList.add('bg-violet-600'); document.getElementById('tab-btn-'+name).classList.remove('bg-white/5','border','border-white/10');
   if(name==='bagger'){ if(!document.getElementById('baggerList').innerHTML) scanBagger(); loadPaper(); }
-  if(name==='whale') { document.getElementById('whaleMint').value = document.getElementById('mintInput').value; }
 }
 async function scanBagger(){
   const btn=document.getElementById('btnBagger'); const status=document.getElementById('baggerStatus'); const list=document.getElementById('baggerList');
