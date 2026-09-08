@@ -53,12 +53,8 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
             # skip stable/large cap
             if symbol in EXCLUDE_SYMBOLS:
                 continue
-            # skip copycat Solana low mcap
-            try:
-                fdv_f = float(p.get('fdv') or 0)
-            except:
-                fdv_f = 0
-            if symbol in COPYCAT_SYMBOLS and chain == 'solana' and fdv_f < 5000000:
+            # skip copycat Solana semua - DOGE/PEPE di Solana itu copyan, bukan micin
+            if symbol in COPYCAT_SYMBOLS and chain == 'solana':
                 continue
             # key unik mint+chain biar gak duplikat lintas chain
             key = f"{chain}:{mint}"
