@@ -67,7 +67,7 @@ def paper_buy(mint, symbol, price, size_pct=2, reason="bagger signal"):
     }
     port["trades"].append(trade)
     save_portfolio(port)
-    return {"ok": True, "trade": trade, "portfolio": port}
+    return {"ok": True, "trade": trade, "portfolio": get_portfolioSummary(port)}
 
 def paper_sell(mint, price, pct=100, reason="take profit"):
     """Paper sell pct of position"""
@@ -109,7 +109,7 @@ def paper_sell(mint, price, pct=100, reason="take profit"):
     }
     port["trades"].append(trade)
     save_portfolio(port)
-    return {"ok": True, "trade": trade, "portfolio": port, "pnl": pnl}
+    return {"ok": True, "trade": trade, "portfolio": get_portfolioSummary(port), "pnl": pnl, "pnl_pct": pnl_pct}
 
 def check_tp_sl():
     """Cek TP 100% (2x) dan SL -50% untuk semua posisi - dipanggil tiap price poll"""
@@ -118,8 +118,45 @@ def check_tp_sl():
     # untuk sekarang, return info aja
     return port
 
+def get_portfolioSummary(port=None):
+    """Return portfolio dengan unrealized PnL per posisi"""
+    if port is None:
+        port = load_portfolio()
+    pos_summary = {}
+    total_unrealized = 0
+    for mint, pos in port.get("positions", {}).items():
+        entry = pos.get("entry_price", 0)
+        amount = pos.get("amount", 0)
+        size = pos.get("size_usd", 0)
+        # current_price diisi dari price poll luar, default entry
+        current = pos.get("current_price", entry)
+        unrealized = (current - entry) * amount if current and entry else 0
+        roi_pct = ((current - entry) / entry * 100) if entry and current else 0
+        total_unrealized += unrealized
+        pos_summary[mint] = {
+            "symbol": pos.get("symbol", ""),
+            "amount": amount,
+            "entry_price": entry,
+            "current_price": current,
+            "size_usd": size,
+            "unrealized_pnl": round(unrealized, 2),
+            "roi_pct": round(roi_pct, 1),
+        }
+    total_value = port.get("balance_usd", 0) + sum(p["size_usd"] for p in pos_summary.values()) + total_unrealized
+    return {
+        "balance_usd": port.get("balance_usd", 0),
+        "positions": pos_summary,
+        "total_value": round(total_value, 2),
+        "total_pnl": port.get("total_pnl", 0),
+        "total_unrealized": round(total_unrealized, 2),
+        "win_trades": port.get("win_trades", 0),
+        "loss_trades": port.get("loss_trades", 0),
+        "trades": port.get("trades", [])[-10:],
+    }
+
+
 def get_portfolio():
-    return load_portfolio()
+    return get_portfolioSummary()
 
 # Real trade via Jupiter (siap, tapi paper dulu)
 def real_trade_via_jupiter(mint, amount, side="buy"):
