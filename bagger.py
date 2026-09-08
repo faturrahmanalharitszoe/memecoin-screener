@@ -7,6 +7,10 @@ import time
 
 HEADERS = {"User-Agent": "meme-screener-bagger/1.0"}
 
+# Exclude stable/large cap yang bukan micin bagger
+EXCLUDE_SYMBOLS = {"SOL", "WSOL", "WETH", "WBNB", "USDC", "USDT", "WLD", "PYTH", "JUP", "RAY", "ORCA"}  # only base, not meme
+EXCLUDE_MINTS = set()  # bisa tambah mint yang mau exclude
+
 # Cache untuk trending
 TRENDING_CACHE = {"data": None, "ts": 0}
 TRENDING_TTL = 300  # 5 menit
@@ -38,11 +42,15 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
                     all_pairs.extend(j.get("pairs", [])[:30])
             except:
                 continue
-        # Filter: ambil semua chain, sort by volume
+        # Filter: ambil semua chain, sort by volume, exclude stable/large cap
         seen = set()
         for p in sorted(all_pairs, key=lambda x: (x.get("volume", {}).get("h24") or 0), reverse=True):
             mint = p.get("baseToken", {}).get("address")
             chain = p.get("chainId")
+            symbol = (p.get("baseToken", {}).get("symbol") or "").upper()
+            # skip stable/large cap
+            if symbol in EXCLUDE_SYMBOLS:
+                continue
             # key unik mint+chain biar gak duplikat lintas chain
             key = f"{chain}:{mint}"
             if mint and key not in seen and len(tokens) < limit:
@@ -61,13 +69,16 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
     except Exception as e:
         print(f"[BAGGER] DexScreener trending fail {e}")
     
-    # 2. Pump.fun trending (jika ada)
+    # 2. Pump.fun trending (micin beneran, bukan stable)
     try:
         r = requests.get("https://frontend-api.pump.fun/coins/trending", headers=HEADERS, timeout=10)
         if r.status_code == 200:
             j = r.json()
             for c in j[:20]:
                 mint = c.get("mint")
+                symbol = (c.get("symbol") or "").upper()
+                if symbol in EXCLUDE_SYMBOLS:
+                    continue
                 if mint and mint not in [t["mint"] for t in tokens] and len(tokens) < limit:
                     tokens.append({
                         "mint": mint,
@@ -93,6 +104,9 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
                 coins = j if isinstance(j, list) else j.get("coins", [])
                 for c in coins[:20]:
                     mint = c.get("mint")
+                    symbol = (c.get("symbol") or "").upper()
+                    if symbol in EXCLUDE_SYMBOLS:
+                        continue
                     if mint and mint not in [t["mint"] for t in tokens] and len(tokens) < limit + 10:
                         tokens.append({
                             "mint": mint,
