@@ -27,6 +27,49 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
         return TRENDING_CACHE["data"]
     
     tokens = []
+    # 0. GeckoTerminal trending All-Chain (real trending kayak di screenshot BNC4, 4Stock)
+    try:
+        for net in ["solana", "bsc", "eth", "base"]:
+            try:
+                r = requests.get(f"https://api.geckoterminal.com/api/v2/networks/{net}/trending_pools", headers=HEADERS, timeout=8)
+                if r.status_code == 200:
+                    j = r.json()
+                    for pool in j.get("data", [])[:8]:
+                        attrs = pool.get("attributes", {})
+                        # ambil base token dari pool id
+                        pool_id = pool.get("id", "")
+                        # Gecko pool id format: solana_0x... or bsc_0x...
+                        # Untuk simplicity, ambil symbol dari name
+                        name = attrs.get("name", "")
+                        symbol = name.split(" / ")[0] if " / " in name else name[:8]
+                        if symbol.upper() in EXCLUDE_SYMBOLS or symbol.upper() in COPYCAT_SYMBOLS:
+                            continue
+                        # fdv/mcap
+                        try:
+                            fdv = float(attrs.get("fdv_usd") or attrs.get("market_cap_usd") or 0)
+                        except:
+                            fdv = 0
+                        if fdv and fdv < 500000:
+                            continue
+                        mint = pool_id.split("_")[-1] if "_" in pool_id else pool_id
+                        chain = net
+                        key = f"{chain}:{mint}"
+                        if mint and key not in [f"{x['chain']}:{x['mint']}" for x in tokens] and len(tokens) < limit:
+                            tokens.append({
+                                "mint": mint,
+                                "chain": chain,
+                                "symbol": symbol,
+                                "name": name,
+                                "priceUsd": attrs.get("base_token_price_usd"),
+                                "volume24h": None,
+                                "liquidity": None,
+                                "fdv": fdv,
+                                "pairUrl": f"https://www.geckoterminal.com/{net}/pools/{attrs.get('address')}",
+                            })
+            except:
+                continue
+    except:
+        pass
     # 1. DexScreener trending All-Chain (Solana, ETH, BSC, Base, Robinhood chain)
     try:
         # Coba trending all-chain dulu, fallback ke search SOL
@@ -53,8 +96,8 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
             # skip stable/large cap
             if symbol in EXCLUDE_SYMBOLS:
                 continue
-            # skip copycat Solana semua - DOGE/PEPE di Solana itu copyan, bukan micin
-            if symbol in COPYCAT_SYMBOLS and chain == 'solana':
+            # skip copycat semua chain - PEPE/DOGE copy dimana-mana, bukan micin beneran
+            if symbol in COPYCAT_SYMBOLS:
                 continue
             # key unik mint+chain biar gak duplikat lintas chain
             key = f"{chain}:{mint}"
