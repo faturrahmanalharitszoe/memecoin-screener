@@ -408,8 +408,13 @@ def api_bagger():
         from meme_screener import fetch_dexscreener, fetch_rugcheck, calculate_durability
         from bagger import fetch_trending_solana, is_bagger_candidate
         import time
-        trending = fetch_trending_solana(limit=20)
+        relaxed = request.args.get("relaxed") == "true"
+        show_filtered = request.args.get("show_filtered") == "true"
+        beyond = request.args.get("beyond") == "true"
+        limit = int(request.args.get("limit") or 20)
+        trending = fetch_trending_solana(limit=limit, beyond_trending=beyond)
         baggers = []
+        filtered = []
         for tok in trending[:6]:  # limit 6 biar cepat, gak timeout
             mint = tok["mint"]
             try:
@@ -426,27 +431,32 @@ def api_bagger():
                 except:
                     pass
                 score, _, _ = calculate_durability(dex, rug, None)
-                is_bag, reason = is_bagger_candidate(dex, rug, social, score)
+                is_bag, reason = is_bagger_candidate(dex, rug, social, score, relaxed=relaxed)
+                entry = {
+                    "mint": mint,
+                    "chain": tok.get("chain") or dex.get("best_pair",{}).get("chainId") or "solana",
+                    "symbol": tok.get("symbol") or dex.get("best_pair",{}).get("baseToken",{}).get("symbol"),
+                    "name": tok.get("name"),
+                    "price": dex.get("price_usd"),
+                    "mcap": dex.get("market_cap"),
+                    "holders": rug.get("total_holders"),
+                    "top10": rug.get("top10_pct"),
+                    "score": score,
+                    "social": social.get("score"),
+                    "reason": reason,
+                    "dex": dex.get("dex"),
+                    "pairUrl": tok.get("pairUrl"),
+                }
                 if is_bag:
-                    baggers.append({
-                        "mint": mint,
-                        "symbol": tok.get("symbol") or dex.get("best_pair",{}).get("baseToken",{}).get("symbol"),
-                        "name": tok.get("name"),
-                        "price": dex.get("price_usd"),
-                        "mcap": dex.get("market_cap"),
-                        "holders": rug.get("total_holders"),
-                        "top10": rug.get("top10_pct"),
-                        "score": score,
-                        "social": social.get("score"),
-                        "reason": reason,
-                        "dex": dex.get("dex"),
-                        "pairUrl": tok.get("pairUrl"),
-                    })
+                    baggers.append(entry)
+                elif show_filtered:
+                    entry["filtered_reason"] = reason
+                    filtered.append(entry)
                 # small delay biar gak 429
                 time.sleep(0.1)
             except Exception as e:
                 continue
-        return jsonify({"baggers": baggers, "scanned": len(trending), "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()})
+        return jsonify({"baggers": baggers, "filtered": filtered, "scanned": len(trending), "relaxed": relaxed, "beyond": beyond, "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()})
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -762,11 +772,20 @@ HTML = r"""
   <div id="tab-bagger" class="hidden space-y-4">
     <div class="glass rounded-2xl p-5">
       <div class="flex items-center justify-between">
-        <div><h3 class="font-bold">🚀 Bagger Hunter + Based Bot (All Chain)</h3><p class="text-xs text-white/50">Scan all-chain micin bagger (Solana, ETH, BSC, Base, Robinhood chain) + auto paper BUY 2%.</p></div>
+        <div><h3 class="font-bold">🚀 Bagger Hunter + Based Bot (All Chain)</h3><p class="text-xs text-white/50">Scan all-chain micin bagger + auto paper BUY 2%. Jangan cuma trending - new micin juga.</p></div>
         <button onclick="scanBagger()" id="btnBagger" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl font-semibold text-sm">🔍 Scan Bagger</button>
+      </div>
+      <div class="flex flex-wrap gap-4 mt-3 text-xs">
+        <label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" id="baggerRelaxed" class="accent-emerald-600"> Mode Relaxed (mcap 100M, dur 45)</label>
+        <label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" id="baggerFiltered" class="accent-violet-600" checked> Lihat ke-filter + alasan</label>
+        <label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" id="baggerBeyond" class="accent-amber-600"> Beyond trending (new Pump.fun)</label>
       </div>
       <div id="baggerStatus" class="text-xs text-white/50 mt-3"></div>
       <div id="baggerList" class="mt-4 grid gap-3"></div>
+      <div id="baggerFilteredList" class="mt-6 space-y-3 hidden">
+        <h4 class="text-xs font-bold tracking-widest text-white/40">YANG KE-FILTER (kenapa gak lolos)</h4>
+        <div id="baggerFiltered" class="grid gap-2"></div>
+      </div>
     </div>
     <div class="glass rounded-2xl p-5">
       <div class="flex items-center justify-between">
@@ -823,13 +842,21 @@ function showTab(name){
 }
 async function scanBagger(){
   const btn=document.getElementById('btnBagger'); const status=document.getElementById('baggerStatus'); const list=document.getElementById('baggerList');
-  btn.disabled=true; btn.textContent='Scanning...'; status.textContent='Scan 12 trending micin, cek durability+social tiap token ~0.3s, total ~4s...';
+  const relaxed=document.getElementById('baggerRelaxed')?.checked; const showFiltered=document.getElementById('baggerFiltered')?.checked; const beyond=document.getElementById('baggerBeyond')?.checked;
+  btn.disabled=true; btn.textContent='Scanning...'; status.textContent=(beyond?'Scan trending + new micin':'Scan trending') + ', cek durability+social tiap token ~0.3s...';
   list.innerHTML='<div class="text-center py-8 text-white/50">Scanning micin bagger...</div>';
+  document.getElementById('baggerFilteredList').classList.add('hidden');
   try{
-    const r=await fetch('/api/bagger'); const j=await r.json();
+    const params=new URLSearchParams({relaxed: relaxed, show_filtered: showFiltered, beyond: beyond, limit: 20});
+    const r=await fetch('/api/bagger?'+params); const j=await r.json();
     if(j.error) throw new Error(j.error);
-    status.textContent=`Scanned ${j.scanned} trending, found ${j.baggers.length} bagger candidate`;
-    if(!j.baggers.length){ list.innerHTML='<div class="text-center py-8 text-white/30">Gak ada bagger hari ini - micin sepi atau udah pump</div>'; return; }
+    status.textContent=`Scanned ${j.scanned} trending${j.beyond ? ' + new' : ''}, found ${j.baggers.length} bagger candidate${j.relaxed ? ' (relaxed)' : ''}`;
+    // show filtered if enabled
+    if(j.filtered && j.filtered.length && document.getElementById('baggerFiltered')?.checked){
+      document.getElementById('baggerFilteredList').classList.remove('hidden');
+      document.getElementById('baggerFiltered').innerHTML = j.filtered.slice(0,10).map(f=>`<div class="bg-white/5 border border-white/5 rounded-xl p-3 opacity-60"><p class="mono text-xs font-bold">${f.symbol||f.mint.slice(0,6)} <span class="text-white/40">${f.chain||'solana'}</span> - mcap $${(f.mcap||0).toLocaleString()} | score ${f.score} | social ${f.social}</p><p class="text-[11px] text-amber-300/80 mt-1">${f.reason}</p></div>`).join('');
+    }
+    if(!j.baggers.length){ list.innerHTML='<div class="text-center py-8 text-white/30">Gak ada bagger hari ini - coba Mode Relaxed atau Beyond trending</div>'; return; }
     list.innerHTML=j.baggers.map(b=>`<div class="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-wrap gap-3 items-center justify-between">
       <div><p class="font-bold mono">${b.symbol || b.mint.slice(0,6)} <span class="text-white/50 text-xs">${b.mint.slice(0,6)}...${b.mint.slice(-4)}</span></p><p class="text-xs mono">mcap $${(b.mcap||0).toLocaleString()} | holders ${b.holders?.toLocaleString()||'-'} | top10 ${b.top10?.toFixed(1)}% | score ${b.score} | social ${b.social}</p><p class="text-[11px] text-white/40 mt-1">${b.reason}</p></div>
       <div class="flex gap-2"><a href="${b.pairUrl}" target="_blank" class="px-3 py-2 rounded-full bg-white/10 text-xs">Dex ↗</a><button onclick="document.getElementById('mintInput').value='${b.mint}'; showTab('screener'); doScreen();" class="px-3 py-2 rounded-full bg-violet-600 text-xs font-bold">Screen</button><button onclick="paperBuyFor('${b.mint}','${b.symbol||''}',${b.price||0})" class="px-3 py-2 rounded-full bg-emerald-600 text-xs font-bold">Paper BUY</button></div>

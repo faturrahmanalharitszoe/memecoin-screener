@@ -11,10 +11,13 @@ HEADERS = {"User-Agent": "meme-screener-bagger/1.0"}
 TRENDING_CACHE = {"data": None, "ts": 0}
 TRENDING_TTL = 300  # 5 menit
 
-def fetch_trending_solana(limit=15):
-    """Ambil trending Solana tokens dari DexScreener + Pump.fun"""
+def fetch_trending_solana(limit=15, beyond_trending=False):
+    """Ambil trending + new micin dari DexScreener + Pump.fun (all-chain). beyond_trending=True = scan new pump.fun juga"""
+    # cache key beda untuk beyond
+    cache_key = f"beyond_{limit}" if beyond_trending else f"trending_{limit}"
     now = time.time()
-    if TRENDING_CACHE["data"] and now - TRENDING_CACHE["ts"] < TRENDING_TTL:
+    # simple cache per limit+mode
+    if TRENDING_CACHE["data"] and now - TRENDING_CACHE["ts"] < TRENDING_TTL and TRENDING_CACHE.get("key") == cache_key:
         return TRENDING_CACHE["data"]
     
     tokens = []
@@ -79,12 +82,53 @@ def fetch_trending_solana(limit=15):
     except:
         pass
 
+    # 3. Jika beyond_trending, tambah new Pump.fun coins (bukan cuma trending)
+    if beyond_trending:
+        try:
+            # Pump.fun new coins (bukan trending)
+            r = requests.get("https://frontend-api.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false", headers=HEADERS, timeout=8)
+            if r.status_code == 200:
+                j = r.json()
+                # bisa array atau object dengan coins
+                coins = j if isinstance(j, list) else j.get("coins", [])
+                for c in coins[:20]:
+                    mint = c.get("mint")
+                    if mint and mint not in [t["mint"] for t in tokens] and len(tokens) < limit + 10:
+                        tokens.append({
+                            "mint": mint,
+                            "chain": "solana",
+                            "symbol": c.get("symbol"),
+                            "name": c.get("name"),
+                            "priceUsd": None,
+                            "volume24h": None,
+                            "liquidity": None,
+                            "fdv": None,
+                            "pairUrl": f"https://pump.fun/coin/{mint}",
+                        })
+        except:
+            pass
+        # DexScreener new pairs (all-chain)
+        try:
+            r = requests.get("https://api.dexscreener.com/latest/dex/search/?q=pepe", headers=HEADERS, timeout=8)
+            # sudah di atas, skip
+            pass
+        except:
+            pass
+
     TRENDING_CACHE["data"] = tokens
     TRENDING_CACHE["ts"] = now
+    TRENDING_CACHE["key"] = cache_key
     return tokens
 
-def is_bagger_candidate(dex, rug, social, durability_score):
+def is_bagger_candidate(dex, rug, social, durability_score, relaxed=False):
     """Cek apakah token potensi bagger"""
+    # threshold
+    mcap_max = 100_000_000 if relaxed else 50_000_000
+    durability_min = 45 if relaxed else 55
+    social_min = 50 if relaxed else 65
+    top10_max = 40 if relaxed else 35
+    vol_ratio_min = 5 if relaxed else 10
+    holders_min = 300 if relaxed else 500
     if not dex or not rug:
         return False, "data tidak lengkap"
     
@@ -100,13 +144,13 @@ def is_bagger_candidate(dex, rug, social, durability_score):
     reasons = []
     is_bagger = True
 
-    # Market cap 0.5M - 50M
+    # Market cap 0.5M - 50M (100M kalau relaxed)
     if mcap < 500_000:
         is_bagger = False
         reasons.append(f"mcap terlalu kecil ${mcap:,.0f} (<500k) - risiko scam")
-    elif mcap > 50_000_000:
+    elif mcap > mcap_max:
         is_bagger = False
-        reasons.append(f"mcap besar ${mcap:,.0f} (>50M) - sudah bukan micin bagger")
+        reasons.append(f"mcap besar ${mcap:,.0f} (>{mcap_max/1_000_000:.0f}M) - sudah bukan micin bagger")
 
     # Liquidity
     if liq < 50_000:
@@ -117,37 +161,37 @@ def is_bagger_candidate(dex, rug, social, durability_score):
         reasons.append(f"liq/mcap {liq_ratio:.2f}% (<2%) MCAP illusion")
 
     # Holders
-    if holders < 500:
+    if holders < holders_min:
         is_bagger = False
-        reasons.append(f"holders {holders} (<500) terlalu sepi")
+        reasons.append(f"holders {holders} (<{holders_min}) terlalu sepi")
     elif holders > 50000:
         # masih bisa bagger tapi sudah ramai
         reasons.append(f"holders {holders} (>50k) ramai - bagger potensi menipis")
 
     # Whale
-    if top10 > 35:
+    if top10 > top10_max:
         is_bagger = False
-        reasons.append(f"top10 {top10:.1f}% (>35%) whale risk")
+        reasons.append(f"top10 {top10:.1f}% (>{top10_max}%) whale risk")
 
     # Volume
     if vol < 100_000:
         is_bagger = False
         reasons.append(f"vol 24h ${vol:,.0f} (<100k) sepi")
-    if vol_ratio < 10:
+    if vol_ratio < vol_ratio_min:
         is_bagger = False
-        reasons.append(f"vol/mcap {vol_ratio:.1f}% (<10%) kurang aktif")
+        reasons.append(f"vol/mcap {vol_ratio:.1f}% (<{vol_ratio_min}%) kurang aktif")
     if vol_ratio > 50:
         reasons.append(f"vol/mcap {vol_ratio:.1f}% (>50%) wash curiga")
 
     # Durability
-    if durability_score < 55:
+    if durability_score < durability_min:
         is_bagger = False
-        reasons.append(f"durability {durability_score} (<55) struktur lemah")
+        reasons.append(f"durability {durability_score} (<{durability_min}) struktur lemah")
 
     # Social
-    if social_score < 65:
+    if social_score < social_min:
         is_bagger = False
-        reasons.append(f"social {social_score} (<65) belum viral")
+        reasons.append(f"social {social_score} (<{social_min}) belum viral")
 
     # Price already pumped?
     pc24 = dex.get("priceChange", {}).get("h24") or 0
