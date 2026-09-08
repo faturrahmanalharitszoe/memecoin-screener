@@ -406,7 +406,7 @@ def api_snapshot(mint):
 def api_bagger():
     try:
         from meme_screener import fetch_dexscreener, fetch_rugcheck, calculate_durability
-        from bagger import fetch_trending_solana, is_bagger_candidate
+        from bagger import fetch_trending_solana, is_bagger_candidate, detect_whale_signal
         import time
         relaxed = request.args.get("relaxed") == "true"
         show_filtered = request.args.get("show_filtered") == "true"
@@ -415,7 +415,7 @@ def api_bagger():
         trending = fetch_trending_solana(limit=limit, beyond_trending=beyond)
         baggers = []
         filtered = []
-        for tok in trending[:6]:  # limit 6 biar cepat, gak timeout
+        for tok in trending[:12]:  # scan 12 biar dpt lebih banyak
             mint = tok["mint"]
             try:
                 dex,_ = fetch_dexscreener(mint)
@@ -426,9 +426,10 @@ def api_bagger():
                     pass
                 if not dex:
                     continue
+                # whale accumulation signal
+                whale = detect_whale_signal(dex)
                 # social & durability
                 from dashboard_app import fetch_social_velocity, get_cached, CACHE_TTL_PRICE
-                # quick social
                 social = {"score": 50}
                 try:
                     social = fetch_social_velocity(mint, dex, None)
@@ -436,6 +437,12 @@ def api_bagger():
                     pass
                 score, _, _ = calculate_durability(dex, rug, None)
                 is_bag, reason = is_bagger_candidate(dex, rug, social, score, relaxed=relaxed)
+                # Whale signal kuat = otomatis bagger (early detection)
+                whale_override = False
+                if whale.get("signal") and whale.get("strength", 0) >= 40:
+                    is_bag = True
+                    reason = "WHALE SIGNAL (" + str(whale['strength']) + "): " + ", ".join(whale.get("reasons", []))
+                    whale_override = True
                 entry = {
                     "mint": mint,
                     "chain": tok.get("chain") or dex.get("best_pair",{}).get("chainId") or "solana",
@@ -443,20 +450,23 @@ def api_bagger():
                     "name": tok.get("name"),
                     "price": dex.get("price_usd"),
                     "mcap": dex.get("market_cap"),
-                    "holders": rug.get("total_holders"),
-                    "top10": rug.get("top10_pct"),
+                    "holders": (rug.get("total_holders") if rug else None),
+                    "top10": (rug.get("top10_pct") if rug else None),
                     "score": score,
                     "social": social.get("score"),
                     "reason": reason,
                     "dex": dex.get("dex"),
                     "pairUrl": tok.get("pairUrl"),
+                    "source": tok.get("source", "trending"),
+                    "whale_signal": whale.get("signal", False),
+                    "whale_strength": whale.get("strength", 0),
+                    "whale_reasons": whale.get("reasons", []),
                 }
                 if is_bag:
                     baggers.append(entry)
                 elif show_filtered:
                     entry["filtered_reason"] = reason
                     filtered.append(entry)
-                # small delay biar gak 429
                 time.sleep(0.1)
             except Exception as e:
                 continue

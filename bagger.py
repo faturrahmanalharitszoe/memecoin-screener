@@ -13,9 +13,195 @@ EXCLUDE_SYMBOLS = {"SOL", "WSOL", "WETH", "WBNB", "USDC", "USDT", "WLD", "PYTH",
 COPYCAT_SYMBOLS = {"PEPE", "DOGE", "SHIB", "FLOKI", "BOME", "POPCAT", "WIF", "BONK"}
 EXCLUDE_MINTS = set()  # bisa tambah mint yang mau exclude
 
+# Chain mapping for GeckoTerminal -> DexScreener
+GECKO_CHAIN_MAP = {"solana": "solana", "bsc": "bsc", "eth": "ethereum", "base": "base"}
+
+# Known whale wallets (Robinhood, Market Maker) - detect when they buy new micin
+KNOWN_WHALE_WALLETS = {
+    "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9",  # Robinhood SOL
+    "GJRs4FwHtemZ5ZE9x3FNvJ8TMwitKTh96QfTiX4eLrPt",  # Robinhood SOL 2
+    "HWfEc9MXxKANXq3uD2A4sFJEb3k8ZXCVnx1Ah4eXb1R",  # Robinhood SOL 3
+}
+
 # Cache untuk trending
 TRENDING_CACHE = {"data": None, "ts": 0}
 TRENDING_TTL = 300  # 5 menit
+
+def fetch_new_micin(limit=20):
+    """Scan newly created micin tokens - GeckoTerminal new pools + DexScreener boosted"""
+    tokens = []
+    # 1. GeckoTerminal new pools (semua chain) - genuine new tokens
+    for net in ["solana", "bsc", "eth", "base"]:
+        try:
+            r = requests.get(f"https://api.geckoterminal.com/api/v2/networks/{net}/new_pools?page=1",
+                           headers=HEADERS, timeout=8)
+            if r.status_code == 200:
+                for pool in r.json().get("data", [])[:8]:
+                    attrs = pool.get("attributes", {})
+                    name = attrs.get("name", "")
+                    symbol = name.split(" / ")[0] if " / " in name else name[:10]
+                    if symbol.upper() in EXCLUDE_SYMBOLS or symbol.upper() in COPYCAT_SYMBOLS:
+                        continue
+                    try:
+                        fdv = float(attrs.get("fdv_usd") or 0)
+                    except:
+                        fdv = 0
+                    # Hanya ambil yang MC < $500k (genuinely new)
+                    if fdv > 500000:
+                        continue
+                    pool_id = pool.get("id", "")
+                    pair_addr = pool_id.split("_")[-1] if "_" in pool_id else pool_id
+                    # Resolve token address
+                    token_addr = pair_addr
+                    try:
+                        ds = requests.get(f"https://api.dexscreener.com/latest/dex/search?q={symbol}",
+                                        headers=HEADERS, timeout=6)
+                        if ds.status_code == 200:
+                            for pp in (ds.json().get("pairs") or []):
+                                if pp.get("chainId") == GECKO_CHAIN_MAP.get(net) and \
+                                   pp.get("baseToken",{}).get("symbol","").upper() == symbol.upper():
+                                    token_addr = pp.get("baseToken",{}).get("address") or pair_addr
+                                    break
+                    except:
+                        pass
+                    key = f"{net}:{token_addr}"
+                    if token_addr not in [x["mint"] for x in tokens] and len(tokens) < limit:
+                        tokens.append({
+                            "mint": token_addr, "chain": net, "symbol": symbol,
+                            "name": name, "priceUsd": attrs.get("base_token_price_usd"),
+                            "volume24h": None, "liquidity": None, "fdv": fdv,
+                            "pairUrl": f"https://www.geckoterminal.com/{net}/pools/{attrs.get('address')}",
+                            "source": "new_pool",
+                        })
+            time.sleep(0.1)
+        except:
+            continue
+    # 2. DexScreener boosted (promoted =有人 bayar promote = whale activity signal)
+    try:
+        r = requests.get("https://api.dexscreener.com/token-boosts/top/v1", headers=HEADERS, timeout=8)
+        if r.status_code == 200:
+            for item in r.json()[:15]:
+                chain = item.get("chainId", "")
+                mint = item.get("tokenAddress", "")
+                if not mint or chain in ["robinhood"]:
+                    continue  # skip robinhood chain buat sekarang
+                # resolve via search
+                try:
+                    ds = requests.get(f"https://api.dexscreener.com/latest/dex/pairs/{chain}/{mint}",
+                                    headers=HEADERS, timeout=6)
+                    if ds.status_code == 200:
+                        pairs = ds.json().get("pairs") or []
+                        for pp in pairs:
+                            if pp.get("chainId") == chain:
+                                real_mint = pp.get("baseToken",{}).get("address") or mint
+                                sym = pp.get("baseToken",{}).get("symbol","")
+                                fdv = pp.get("fdv") or pp.get("marketCap") or 0
+                                if fdv and fdv < 500000 and sym.upper() not in EXCLUDE_SYMBOLS:
+                                    key = f"{chain}:{real_mint}"
+                                    if real_mint not in [x["mint"] for x in tokens] and len(tokens) < limit:
+                                        tokens.append({
+                                            "mint": real_mint, "chain": chain, "symbol": sym,
+                                            "name": pp.get("baseToken",{}).get("name",""),
+                                            "priceUsd": pp.get("priceUsd"),
+                                            "volume24h": pp.get("volume",{}).get("h24"),
+                                            "liquidity": pp.get("liquidity",{}).get("usd"),
+                                            "fdv": fdv, "pairUrl": pp.get("url",""),
+                                            "source": "boosted",
+                                        })
+                                    break
+                except:
+                    continue
+                time.sleep(0.05)
+    except:
+        pass
+    return tokens
+
+
+def detect_whale_signal(dex):
+    """Deteksi whale accumulation signal dari volume/buy pattern"""
+    if not dex:
+        return {"signal": False, "strength": 0, "reasons": []}
+    
+    reasons = []
+    strength = 0
+    
+    txns = dex.get("txns") or {}
+    m5 = txns.get("m5") or {}
+    h1 = txns.get("h1") or {}
+    buys_m5 = m5.get("buys", 0)
+    sells_m5 = m5.get("sells", 0)
+    buys_h1 = h1.get("buys", 0)
+    sells_h1 = h1.get("sells", 0)
+    
+    vol = dex.get("volume") or {}
+    vol_h1 = vol.get("h1", 0) or 0
+    vol_h6 = vol.get("h6", 0) or 0
+    vol_h24 = vol.get("h24", 0) or 0
+    mcap = dex.get("market_cap") or dex.get("fdv") or 1
+    
+    # 1. Buy pressure: buys >> sells dalam 5 menit
+    if buys_m5 > 0 and sells_m5 == 0:
+        strength += 30
+        reasons.append("zero sells in 5m (pure accumulation)")
+    elif buys_m5 > sells_m5 * 2 and buys_m5 >= 3:
+        strength += 20
+        reasons.append("buy pressure " + str(buys_m5) + ":" + str(sells_m5))
+    
+    # 2. Volume spike: vol h1 > rata-rata h6
+    if vol_h6 > 0 and vol_h1 > 0:
+        avg_h = vol_h6 / 6
+        if avg_h > 0 and vol_h1 > avg_h * 1.5:
+            strength += 25
+            reasons.append("vol spike " + str(round(vol_h1/avg_h, 1)) + "x avg")
+    
+    # 3. Vol/Mcap ratio tinggi (volume organik)
+    vol_mcap = (vol_h24 / mcap * 100) if mcap and vol_h24 else 0
+    if vol_mcap > 10:
+        strength += 15
+        reasons.append("vol/mcap " + str(round(vol_mcap, 1)) + "%")
+    
+    # 4. Price naik (priceChange h1 > 5%)
+    pc = dex.get("priceChange") or {}
+    h1_chg = pc.get("h1", 0) or 0
+    if h1_chg > 10:
+        strength += 15
+        reasons.append("+" + str(round(h1_chg, 1)) + "% h1")
+    elif h1_chg > 5:
+        strength += 10
+        reasons.append("+" + str(round(h1_chg, 1)) + "% h1")
+    
+    # 5. Micro cap + liquidity ratio bagus
+    liq = dex.get("total_liquidity_usd") or dex.get("liquidity") or 0
+    if mcap and liq:
+        liq_ratio = liq / mcap * 100
+        if 5 < liq_ratio < 30:
+            strength += 10
+            reasons.append("liq/mcap " + str(round(liq_ratio, 1)) + "%")
+    
+    signal = strength >= 25
+    return {"signal": signal, "strength": strength, "reasons": reasons}
+
+
+def detect_whale_wallet_activity(mint, chain="solana"):
+    """Cek apakah known whale wallet baru beli token ini"""
+    if chain != "solana":
+        return False
+    try:
+        # DexScreener: cek recent trades / makers
+        r = requests.get(f"https://api.dexscreener.com/latest/dex/pairs/solana/{mint}",
+                        headers=HEADERS, timeout=6)
+        if r.status_code == 200:
+            pairs = r.json().get("pairs") or []
+            for p in pairs:
+                info = p.get("info") or {}
+                makers = info.get("makers") or []
+                for m in makers:
+                    if m.get("address") in KNOWN_WHALE_WALLETS:
+                        return True
+    except:
+        pass
+    return False
+
 
 def fetch_trending_solana(limit=15, beyond_trending=False):
     """Ambil trending + new micin dari DexScreener + Pump.fun (all-chain). beyond_trending=True = scan new pump.fun juga"""
@@ -205,43 +391,13 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
     except:
         pass
 
-    # 3. Jika beyond_trending, tambah new Pump.fun coins (bukan cuma trending)
+    # 3. Beyond trending: scan NEW micin dari GeckoTerminal new pools + DexScreener boosted
     if beyond_trending:
-        try:
-            # Pump.fun new coins (bukan trending)
-            r = requests.get("https://frontend-api.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false", headers=HEADERS, timeout=8)
-            if r.status_code == 200:
-                j = r.json()
-                # bisa array atau object dengan coins
-                coins = j if isinstance(j, list) else j.get("coins", [])
-                for c in coins[:20]:
-                    mint = c.get("mint")
-                    symbol = (c.get("symbol") or "").upper()
-                    if symbol in EXCLUDE_SYMBOLS:
-                        continue
-                    if symbol in COPYCAT_SYMBOLS:
-                        continue
-                    if mint and mint not in [t["mint"] for t in tokens] and len(tokens) < limit + 10:
-                        tokens.append({
-                            "mint": mint,
-                            "chain": "solana",
-                            "symbol": c.get("symbol"),
-                            "name": c.get("name"),
-                            "priceUsd": None,
-                            "volume24h": None,
-                            "liquidity": None,
-                            "fdv": None,
-                            "pairUrl": f"https://pump.fun/coin/{mint}",
-                        })
-        except:
-            pass
-        # DexScreener new pairs (all-chain)
-        try:
-            r = requests.get("https://api.dexscreener.com/latest/dex/search/?q=pepe", headers=HEADERS, timeout=8)
-            # sudah di atas, skip
-            pass
-        except:
-            pass
+        new_tokens = fetch_new_micin(limit=limit)
+        for nt in new_tokens:
+            key = f"{nt['chain']}:{nt['mint']}"
+            if key not in [f"{x['chain']}:{x['mint']}" for x in tokens] and len(tokens) < limit:
+                tokens.append(nt)
 
     TRENDING_CACHE["data"] = tokens
     TRENDING_CACHE["ts"] = now
