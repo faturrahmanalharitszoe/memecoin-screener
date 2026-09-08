@@ -135,7 +135,7 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
     return tokens
 
 def is_bagger_candidate(dex, rug, social, durability_score, relaxed=False):
-    """Cek apakah token potensi bagger"""
+    """Cek apakah token potensi bagger - support bonding progress filter user: new bonding >=15% mc<=10k, bonding radar 35-99% mc>=10k, momentum mc>=10k+vol"""
     # threshold
     mcap_max = 100_000_000 if relaxed else 50_000_000
     durability_min = 45 if relaxed else 55
@@ -143,6 +143,35 @@ def is_bagger_candidate(dex, rug, social, durability_score, relaxed=False):
     top10_max = 40 if relaxed else 35
     vol_ratio_min = 5 if relaxed else 10
     holders_min = 300 if relaxed else 500
+
+    # --- Bonding progress filter (Pump.fun) ---
+    # Jika token adalah pump.fun (cek via pairUrl atau dexId), hitung progress dari fdv/liq
+    # progress = (fdv / 60000) *100? Atau dari liquidity: progress = liq_usd / (85*SOL_price) *100
+    # Untuk sekarang, coba ambil progress dari dex data jika ada field 'progress', else estimasi
+    bonding_progress = None
+    try:
+        # DexScreener kadang kasih fdv, mcap, liq - untuk pump.fun, fdv ~ mcap saat bonding
+        mcap_for_bonding = dex.get("market_cap") or dex.get("fdv") or 0
+        # Estimasi progress: mcap 60k = 100% (graduation), jadi progress = mcap/60000*100 capped 100
+        if mcap_for_bonding and mcap_for_bonding < 100000:
+            bonding_progress = min(99, (mcap_for_bonding / 60000 * 100))
+            # Jika ada liq, cross-check: progress dari liq
+            liq_usd = dex.get("total_liquidity_usd") or 0
+            if liq_usd and mcap_for_bonding:
+                # SOL price ~150, 85 SOL = 12750 USD, progress liq = liq / 12750 *100
+                sol_price = 150  # fallback, bisa fetch live
+                try:
+                    import requests
+                    r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd", timeout=3)
+                    if r.status_code == 200:
+                        sol_price = r.json().get("solana", {}).get("usd", 150)
+                except:
+                    pass
+                progress_liq = min(99, (liq_usd / (85 * sol_price) * 100)) if sol_price else bonding_progress
+                # ambil max dari dua estimasi
+                bonding_progress = max(bonding_progress, progress_liq)
+    except:
+        pass
     if not dex or not rug:
         return False, "data tidak lengkap"
     
@@ -158,54 +187,104 @@ def is_bagger_candidate(dex, rug, social, durability_score, relaxed=False):
     reasons = []
     is_bagger = True
 
-    # Market cap 0.5M - 50M (100M kalau relaxed)
-    if mcap < 500_000:
-        is_bagger = False
-        reasons.append(f"mcap terlalu kecil ${mcap:,.0f} (<500k) - risiko scam")
-    elif mcap > mcap_max:
-        is_bagger = False
-        reasons.append(f"mcap besar ${mcap:,.0f} (>{mcap_max/1_000_000:.0f}M) - sudah bukan micin bagger")
+    # --- Bonding filter user: new bonding / radar / momentum ---
+    # Jika bonding_progress terdeteksi (pump.fun), pakai kriteria bonding
+    if bonding_progress is not None:
+        mc_val = mcap  # untuk pump.fun, mcap = fdv
+        if bonding_progress >= 15 and mc_val <= 10000:
+            # new bonding - lolos langsung sebagai bagger early
+            reasons.append(f"new bonding progress {bonding_progress:.1f}% mc ${mc_val:,.0f} (≥15% & ≤10k) - EARLY")
+            # jangan fail di mcap/holder checks di bawah untuk early, tapi tetap cek whale/durability
+            # skip mcap/holder strict untuk early
+            pass
+        elif 35 <= bonding_progress <= 99 and mc_val >= 10000:
+            reasons.append(f"bonding radar {bonding_progress:.1f}% mc ${mc_val:,.0f} (35-99% & ≥10k)")
+            pass
+        elif mc_val >= 10000 and vol > 50000:
+            reasons.append(f"momentum mc ${mc_val:,.0f} vol ${vol:,.0f} (≥10k + gerak)")
+            pass
+        else:
+            # jika bonding progress ada tapi tidak masuk kriteria, tetap lanjut cek strict
+            pass
+        # Untuk bonding, mcap check pakai mc_val bukan mcap_max strict
+        if mc_val < 500_000 and mc_val > 10000:
+            # untuk bonding, mcap kecil masih ok asal progress sesuai
+            pass
+        elif mc_val < 500_000 and bonding_progress is None:
+            is_bagger = False
+            reasons.append(f"mcap terlalu kecil ${mc_val:,.0f} (<500k) - risiko scam")
+        elif mc_val > mcap_max and bonding_progress is None:
+            is_bagger = False
+            reasons.append(f"mcap besar ${mc_val:,.0f} (>{mcap_max/1_000_000:.0f}M) - sudah bukan micin bagger")
+        # skip strict mcap check for bonding - already handled
+    else:
+        # Market cap 0.5M - 50M (100M kalau relaxed) untuk non-bonding
+        if mcap < 500_000:
+            is_bagger = False
+            reasons.append(f"mcap terlalu kecil ${mcap:,.0f} (<500k) - risiko scam")
+        elif mcap > mcap_max:
+            is_bagger = False
+            reasons.append(f"mcap besar ${mcap:,.0f} (>{mcap_max/1_000_000:.0f}M) - sudah bukan micin bagger")
 
     # Liquidity
-    if liq < 50_000:
+    if liq < 1000:
         is_bagger = False
         reasons.append(f"liq tipis ${liq:,.0f} (<50k)")
     if liq_ratio < 2:
         is_bagger = False
         reasons.append(f"liq/mcap {liq_ratio:.2f}% (<2%) MCAP illusion")
 
-    # Holders
-    if holders < holders_min:
-        is_bagger = False
-        reasons.append(f"holders {holders} (<{holders_min}) terlalu sepi")
-    elif holders > 50000:
-        # masih bisa bagger tapi sudah ramai
-        reasons.append(f"holders {holders} (>50k) ramai - bagger potensi menipis")
+    # Holders - untuk bonding new, holder 25 pun ok (early)
+    # Jika bonding new (progress 15-35% & mc <=10k), holder 10+ aja cukup
+    is_new_bonding = bonding_progress is not None and bonding_progress >= 15 and (dex.get("market_cap") or dex.get("fdv") or 0) <= 10000
+    if is_new_bonding:
+        if holders < 10:
+            is_bagger = False
+            reasons.append(f"holders {holders} (<10) terlalu sepi untuk new bonding")
+        # top10 untuk new bonding boleh 100% (belum distribusi)
+        if top10 > 100:
+            is_bagger = False
+            reasons.append(f"top10 {top10:.1f}% (>95%) whale risk untuk new bonding")
+    else:
+        if holders < holders_min:
+            is_bagger = False
+            reasons.append(f"holders {holders} (<{holders_min}) terlalu sepi")
+        elif holders > 50000:
+            reasons.append(f"holders {holders} (>50k) ramai - bagger potensi menipis")
+        if top10 > top10_max:
+            is_bagger = False
+            reasons.append(f"top10 {top10:.1f}% (>{top10_max}%) whale risk")
 
-    # Whale
-    if top10 > top10_max:
-        is_bagger = False
-        reasons.append(f"top10 {top10:.1f}% (>{top10_max}%) whale risk")
-
-    # Volume
-    if vol < 100_000:
-        is_bagger = False
-        reasons.append(f"vol 24h ${vol:,.0f} (<100k) sepi")
-    if vol_ratio < vol_ratio_min:
-        is_bagger = False
-        reasons.append(f"vol/mcap {vol_ratio:.1f}% (<{vol_ratio_min}%) kurang aktif")
+    # Volume - untuk new bonding, vol kecil masih ok asal ada gerak
+    if is_new_bonding:
+        if vol < 1000:
+            is_bagger = False
+            reasons.append(f"vol 24h ${vol:,.0f} (<1k) sepi untuk new bonding")
+    else:
+        if vol < 100_000:
+            is_bagger = False
+            reasons.append(f"vol 24h ${vol:,.0f} (<100k) sepi")
+        if vol_ratio < vol_ratio_min:
+            is_bagger = False
+            reasons.append(f"vol/mcap {vol_ratio:.1f}% (<{vol_ratio_min}%) kurang aktif")
     if vol_ratio > 50:
         reasons.append(f"vol/mcap {vol_ratio:.1f}% (>50%) wash curiga")
 
-    # Durability
-    if durability_score < durability_min:
-        is_bagger = False
-        reasons.append(f"durability {durability_score} (<{durability_min}) struktur lemah")
-
-    # Social
-    if social_score < social_min:
-        is_bagger = False
-        reasons.append(f"social {social_score} (<{social_min}) belum viral")
+    # Durability - untuk new bonding, durability 15 pun ok (baru bonding)
+    if is_new_bonding:
+        if durability_score < 10:
+            is_bagger = False
+            reasons.append(f"durability {durability_score} (<10) struktur lemah untuk new bonding")
+        if social_score < 20:
+            is_bagger = False
+            reasons.append(f"social {social_score} (<20) belum ada gerak untuk new bonding")
+    else:
+        if durability_score < durability_min:
+            is_bagger = False
+            reasons.append(f"durability {durability_score} (<{durability_min}) struktur lemah")
+        if social_score < social_min:
+            is_bagger = False
+            reasons.append(f"social {social_score} (<{social_min}) belum viral")
 
     # Price already pumped?
     pc24 = dex.get("priceChange", {}).get("h24") or 0
