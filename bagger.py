@@ -9,6 +9,8 @@ HEADERS = {"User-Agent": "meme-screener-bagger/1.0"}
 
 # Exclude stable/large cap yang bukan micin bagger
 EXCLUDE_SYMBOLS = {"SOL", "WSOL", "WETH", "WBNB", "USDC", "USDT", "WLD", "PYTH", "JUP", "RAY", "ORCA"}  # only base, not meme
+# Copycat symbols yang sering bikin sampah di Solana
+COPYCAT_SYMBOLS = {"PEPE", "DOGE", "SHIB", "FLOKI", "BOME", "POPCAT", "WIF", "BONK"}
 EXCLUDE_MINTS = set()  # bisa tambah mint yang mau exclude
 
 # Cache untuk trending
@@ -51,6 +53,13 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
             # skip stable/large cap
             if symbol in EXCLUDE_SYMBOLS:
                 continue
+            # skip copycat Solana low mcap
+            try:
+                fdv_f = float(p.get('fdv') or 0)
+            except:
+                fdv_f = 0
+            if symbol in COPYCAT_SYMBOLS and chain == 'solana' and fdv_f < 5000000:
+                continue
             # key unik mint+chain biar gak duplikat lintas chain
             key = f"{chain}:{mint}"
             if mint and key not in seen and len(tokens) < limit:
@@ -77,7 +86,9 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
             for c in j[:20]:
                 mint = c.get("mint")
                 symbol = (c.get("symbol") or "").upper()
-                if symbol in EXCLUDE_SYMBOLS:
+                if symbol in EXCLUDE_SYMBOLS or symbol in COPYCAT_SYMBOLS:
+                    # untuk pump trending, skip copycat juga kalau holder sepi
+                    # cek holder via c.get("reply_count")? Skip aja
                     continue
                 if mint and mint not in [t["mint"] for t in tokens] and len(tokens) < limit:
                     tokens.append({
@@ -106,6 +117,8 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
                     mint = c.get("mint")
                     symbol = (c.get("symbol") or "").upper()
                     if symbol in EXCLUDE_SYMBOLS:
+                        continue
+                    if symbol in COPYCAT_SYMBOLS:
                         continue
                     if mint and mint not in [t["mint"] for t in tokens] and len(tokens) < limit + 10:
                         tokens.append({
