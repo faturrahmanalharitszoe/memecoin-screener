@@ -419,8 +419,12 @@ def api_bagger():
             mint = tok["mint"]
             try:
                 dex,_ = fetch_dexscreener(mint)
-                rug,_ = fetch_rugcheck(mint)
-                if not dex or not rug:
+                rug = None
+                try:
+                    rug,_ = fetch_rugcheck(mint)
+                except:
+                    pass
+                if not dex:
                     continue
                 # social & durability
                 from dashboard_app import fetch_social_velocity, get_cached, CACHE_TTL_PRICE

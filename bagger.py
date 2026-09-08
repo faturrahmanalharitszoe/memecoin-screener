@@ -45,12 +45,25 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
                         except:
                             fdv = 0
                         pool_id = pool.get("id", "")
-                        mint = pool_id.split("_")[-1] if "_" in pool_id else pool_id
+                        pair_addr = pool_id.split("_")[-1] if "_" in pool_id else pool_id
                         chain = net
-                        key = f"{chain}:{mint}"
-                        if mint and key not in [f"{x['chain']}:{x['mint']}" for x in tokens] and len(tokens) < limit:
+                        key = f"{chain}:{pair_addr}"
+                        if pair_addr and key not in [f"{x['chain']}:{x['mint']}" for x in tokens] and len(tokens) < limit:
+                            # Resolve token address via DexScreener search (Gecko kasih pair addr, bukan token addr)
+                            token_addr = pair_addr
+                            try:
+                                ds = requests.get(f"https://api.dexscreener.com/latest/dex/search?q={symbol}", headers=HEADERS, timeout=6)
+                                if ds.status_code == 200:
+                                    dp = ds.json().get("pairs") or []
+                                    # cari yang chain match & symbol match
+                                    for pp in dp:
+                                        if pp.get("chainId") == chain and pp.get("baseToken",{}).get("symbol","").upper() == symbol.upper():
+                                            token_addr = pp.get("baseToken",{}).get("address") or pair_addr
+                                            break
+                            except:
+                                pass
                             tokens.append({
-                                "mint": mint,
+                                "mint": token_addr,
                                 "chain": chain,
                                 "symbol": symbol,
                                 "name": name,
@@ -89,12 +102,23 @@ def fetch_trending_solana(limit=15, beyond_trending=False):
                             fdv = 0
                         if fdv and fdv < 500000:
                             continue
-                        mint = pool_id.split("_")[-1] if "_" in pool_id else pool_id
+                        pair_addr = pool_id.split("_")[-1] if "_" in pool_id else pool_id
                         chain = net
-                        key = f"{chain}:{mint}"
-                        if mint and key not in [f"{x['chain']}:{x['mint']}" for x in tokens] and len(tokens) < limit:
+                        key = f"{chain}:{pair_addr}"
+                        if pair_addr and key not in [f"{x['chain']}:{x['mint']}" for x in tokens] and len(tokens) < limit:
+                            token_addr = pair_addr
+                            try:
+                                ds = requests.get(f"https://api.dexscreener.com/latest/dex/search?q={symbol}", headers=HEADERS, timeout=6)
+                                if ds.status_code == 200:
+                                    dp = ds.json().get("pairs") or []
+                                    for pp in dp:
+                                        if pp.get("chainId") == chain and pp.get("baseToken",{}).get("symbol","").upper() == symbol.upper():
+                                            token_addr = pp.get("baseToken",{}).get("address") or pair_addr
+                                            break
+                            except:
+                                pass
                             tokens.append({
-                                "mint": mint,
+                                "mint": token_addr,
                                 "chain": chain,
                                 "symbol": symbol,
                                 "name": name,
@@ -262,13 +286,13 @@ def is_bagger_candidate(dex, rug, social, durability_score, relaxed=False):
                 bonding_progress = max(bonding_progress, progress_liq)
     except:
         pass
-    if not dex or not rug:
+    if not dex:
         return False, "data tidak lengkap"
     
     mcap = dex.get("market_cap") or dex.get("fdv") or 0
     liq = dex.get("total_liquidity_usd") or 0
-    holders = rug.get("total_holders") or 0
-    top10 = rug.get("top10_pct") or 0
+    holders = rug.get("total_holders") or 0 if rug else 0
+    top10 = rug.get("top10_pct") or 0 if rug else 0
     vol = dex.get("total_vol_24h") or 0
     liq_ratio = (liq / mcap * 100) if mcap else 0
     vol_ratio = (vol / mcap * 100) if mcap else 0
