@@ -6,7 +6,8 @@ import os
 import time
 from datetime import datetime, timezone
 
-PAPER_FILE = os.path.join(os.path.dirname(__file__), "paper_portfolio.json")
+_dir = os.environ.get("PAPER_DIR", "/tmp" if os.path.exists("/tmp") else os.path.dirname(os.path.abspath(__file__)))
+PAPER_FILE = os.path.join(_dir, "paper_portfolio.json")
 INITIAL_BALANCE = 10000  # $10k paper
 
 def load_portfolio():
