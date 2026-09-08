@@ -784,7 +784,7 @@ HTML = r"""
       <div id="baggerList" class="mt-4 grid gap-3"></div>
       <div id="baggerFilteredList" class="mt-6 space-y-3 hidden">
         <h4 class="text-xs font-bold tracking-widest text-white/40">YANG KE-FILTER (kenapa gak lolos)</h4>
-        <div id="baggerFiltered" class="grid gap-2"></div>
+        <div id="baggerFilteredGrid" class="grid gap-2"></div>
       </div>
     </div>
     <div class="glass rounded-2xl p-5">
@@ -854,7 +854,7 @@ async function scanBagger(){
     // show filtered if enabled
     if(j.filtered && j.filtered.length && document.getElementById('baggerFiltered')?.checked){
       document.getElementById('baggerFilteredList').classList.remove('hidden');
-      document.getElementById('baggerFiltered').innerHTML = j.filtered.slice(0,10).map(f=>`<div class="bg-white/5 border border-white/5 rounded-xl p-3 opacity-60"><p class="mono text-xs font-bold">${f.symbol||f.mint.slice(0,6)} <span class="text-white/40">${f.chain||'solana'}</span> - mcap $${(f.mcap||0).toLocaleString()} | score ${f.score} | social ${f.social}</p><p class="text-[11px] text-amber-300/80 mt-1">${f.reason}</p></div>`).join('');
+      document.getElementById('baggerFilteredGrid').innerHTML = j.filtered.slice(0,10).map(f=>`<div class="bg-white/5 border border-white/5 rounded-xl p-3 opacity-60"><p class="mono text-xs font-bold">${f.symbol||f.mint.slice(0,6)} <span class="text-white/40">${f.chain||'solana'}</span> - mcap $${(f.mcap||0).toLocaleString()} | score ${f.score} | social ${f.social}</p><p class="text-[11px] text-amber-300/80 mt-1">${f.reason}</p></div>`).join('');
     }
     if(!j.baggers.length){ list.innerHTML='<div class="text-center py-8 text-white/30">Gak ada bagger hari ini - coba Mode Relaxed atau Beyond trending</div>'; return; }
     list.innerHTML=j.baggers.map(b=>`<div class="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-wrap gap-3 items-center justify-between">
