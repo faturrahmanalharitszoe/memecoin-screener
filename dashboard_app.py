@@ -944,8 +944,8 @@ HTML = r"""
       <div id="paperStats" class="grid grid-cols-3 gap-3 mt-4"></div>
       <div id="paperPositions" class="mt-4 space-y-2"></div>
       <div id="paperOrders" class="mt-4 hidden"><h4 class="text-xs font-bold text-white/40 tracking-widest mb-2">LIMIT ORDERS</h4><div id="paperOrdersList" class="space-y-1"></div></div>
-      <div class="mt-3 flex gap-2">
-        <button onclick="resetPortfolio()" class="text-[10px] text-red-400/60 hover:text-red-400 underline">Reset Portfolio</button>
+      <div class="mt-4 flex items-center justify-between">
+        <button onclick="resetPortfolio()" class="px-4 py-2 rounded-xl bg-red-600/20 border border-red-500/30 text-red-400 text-xs hover:bg-red-600/40">Reset Portfolio ($10k)</button>
       </div>
       <div id="paperTrades" class="mt-4 max-h-[300px] overflow-auto space-y-1 text-xs"></div>
     </div>
