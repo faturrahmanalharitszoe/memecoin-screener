@@ -173,6 +173,110 @@ def paper_sell(mint, price, pct=100, reason="take profit"):
     except Exception as e:
         return {"error": str(e)}
 
+# --- Reset / Cleanup ---
+
+def reset_portfolio():
+    """Reset portfolio ke fresh $10k"""
+    sb = _get_sb()
+    if not sb:
+        return {"error": "Supabase not configured"}
+    try:
+        port = _get_or_create_portfolio(sb)
+        pid = port["id"]
+        sb.table("paper_positions").delete().eq("portfolio_id", pid).execute()
+        sb.table("paper_trades").delete().eq("portfolio_id", pid).execute()
+        try:
+            sb.table("paper_orders").delete().eq("portfolio_id", pid).execute()
+        except:
+            pass
+        _update_portfolio(sb, pid, {
+            "balance_usd": INITIAL_BALANCE,
+            "total_pnl": 0,
+            "win_trades": 0,
+            "loss_trades": 0,
+        })
+        return {"ok": True, "balance": INITIAL_BALANCE}
+    except Exception as e:
+        return {"error": str(e)}
+
+def delete_trade(trade_id):
+    sb = _get_sb()
+    if not sb:
+        return {"error": "Supabase not configured"}
+    try:
+        sb.table("paper_trades").delete().eq("id", trade_id).execute()
+        return {"ok": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- Limit Orders ---
+
+def create_limit_order(mint, symbol, target_price, pct=100):
+    sb = _get_sb()
+    if not sb:
+        return {"error": "Supabase not configured"}
+    try:
+        port = _get_or_create_portfolio(sb)
+        pid = port["id"]
+        positions = _get_positions(sb, pid)
+        if mint not in positions:
+            return {"error": "no position"}
+        order = {
+            "portfolio_id": pid, "mint": mint, "symbol": symbol,
+            "target_price": target_price, "pct": pct,
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        res = sb.table("paper_orders").insert(order).execute()
+        return {"ok": True, "order_id": res.data[0]["id"] if res.data else None}
+    except Exception as e:
+        return {"error": str(e)}
+
+def get_limit_orders():
+    sb = _get_sb()
+    if not sb:
+        return []
+    try:
+        port = _get_or_create_portfolio(sb)
+        pid = port["id"]
+        res = sb.table("paper_orders").select("*").eq("portfolio_id", pid).eq("status", "pending").execute()
+        return res.data or []
+    except:
+        return []
+
+def cancel_limit_order(order_id):
+    sb = _get_sb()
+    if not sb:
+        return {"error": "Supabase not configured"}
+    try:
+        sb.table("paper_orders").update({"status": "cancelled"}).eq("id", order_id).execute()
+        return {"ok": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+def check_limit_orders(prices):
+    sb = _get_sb()
+    if not sb:
+        return []
+    try:
+        orders = get_limit_orders()
+        executed = []
+        for order in orders:
+            mint = order["mint"]
+            target = float(order["target_price"])
+            current = prices.get(mint)
+            if current is None:
+                continue
+            if current >= target:
+                pct = float(order.get("pct", 100))
+                result = paper_sell(mint, current, pct, "limit_order_tp")
+                if result.get("ok"):
+                    sb.table("paper_orders").update({"status": "filled"}).eq("id", order["id"]).execute()
+                    executed.append({"mint": mint, "symbol": order.get("symbol"), "price": current, "target": target})
+        return executed
+    except:
+        return []
+
 def get_portfolio():
     sb = _get_sb()
     if not sb:

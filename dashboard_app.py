@@ -567,6 +567,48 @@ def api_paper_sell():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/paper/reset", methods=["POST"])
+def api_paper_reset():
+    try:
+        from paper_bot import reset_portfolio
+        res = reset_portfolio()
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/paper/limit-order", methods=["POST"])
+def api_limit_order():
+    try:
+        data = request.get_json() or {}
+        mint = data.get("mint")
+        symbol = data.get("symbol", "")
+        target_price = float(data.get("target_price") or 0)
+        pct = float(data.get("pct") or 100)
+        if not mint or not target_price:
+            return jsonify({"error": "mint & target_price required"}), 400
+        from paper_bot import create_limit_order
+        res = create_limit_order(mint, symbol, target_price, pct)
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/paper/limit-orders")
+def api_limit_orders():
+    try:
+        from paper_bot import get_limit_orders
+        return jsonify({"orders": get_limit_orders()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/paper/limit-order/<order_id>", methods=["DELETE"])
+def api_cancel_limit(order_id):
+    try:
+        from paper_bot import cancel_limit_order
+        res = cancel_limit_order(order_id)
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/trade/config")
 def api_trade_config():
     """Check apakah real trade sudah dikonfigurasi"""
@@ -892,7 +934,65 @@ HTML = r"""
       </div>
       <div id="paperStats" class="grid grid-cols-3 gap-3 mt-4"></div>
       <div id="paperPositions" class="mt-4 space-y-2"></div>
+      <div id="paperOrders" class="mt-4 hidden"><h4 class="text-xs font-bold text-white/40 tracking-widest mb-2">LIMIT ORDERS</h4><div id="paperOrdersList" class="space-y-1"></div></div>
+      <div class="mt-3 flex gap-2">
+        <button onclick="resetPortfolio()" class="text-[10px] text-red-400/60 hover:text-red-400 underline">Reset Portfolio</button>
+      </div>
       <div id="paperTrades" class="mt-4 max-h-[300px] overflow-auto space-y-1 text-xs"></div>
+    </div>
+  </div>
+
+  <!-- SELL MODAL -->
+  <div id="sellModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-gray-900 border border-white/10 rounded-2xl p-5 w-full max-w-md">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="font-bold text-lg">SELL <span id="sellSym"></span></h3>
+        <button onclick="closeSellModal()" class="text-white/40 hover:text-white text-xl">&times;</button>
+      </div>
+      <div id="sellInfo" class="text-xs text-white/50 mb-4"></div>
+      <div class="flex gap-2 mb-4">
+        <button onclick="setSellMode('market')" id="sellModeMarket" class="flex-1 py-2 rounded-xl text-sm font-bold bg-emerald-600 text-white">Sell Now</button>
+        <button onclick="setSellMode('limit')" id="sellModeLimit" class="flex-1 py-2 rounded-xl text-sm text-white/50 bg-white/5 border border-white/10">Limit Order</button>
+      </div>
+      <div id="sellMarketSection">
+        <div class="flex gap-2 mb-3">
+          <button onclick="setSellPct(25)" class="sell-pct-btn flex-1 py-2 rounded-lg text-xs bg-white/5 border border-white/10 hover:bg-white/10">25%</button>
+          <button onclick="setSellPct(50)" class="sell-pct-btn flex-1 py-2 rounded-lg text-xs bg-white/5 border border-white/10 hover:bg-white/10">50%</button>
+          <button onclick="setSellPct(75)" class="sell-pct-btn flex-1 py-2 rounded-lg text-xs bg-white/5 border border-white/10 hover:bg-white/10">75%</button>
+          <button onclick="setSellPct(100)" class="sell-pct-btn flex-1 py-2 rounded-lg text-xs bg-emerald-600 text-white">100%</button>
+        </div>
+        <div class="bg-white/5 rounded-xl p-3 mb-3">
+          <p class="text-[10px] text-white/40 mb-1">SELL AMOUNT</p>
+          <div class="flex items-center gap-2">
+            <input id="sellAmountInput" type="number" step="any" class="flex-1 bg-transparent text-white font-mono text-sm outline-none" placeholder="0">
+            <span class="text-xs text-white/40">tokens</span>
+          </div>
+        </div>
+        <div class="bg-white/5 rounded-xl p-3 mb-3">
+          <p class="text-[10px] text-white/40 mb-1">EST. RECEIVED</p>
+          <p class="font-mono text-sm" id="sellEstUsd">$0.00</p>
+        </div>
+        <button onclick="executeSell()" id="btnSellNow" class="w-full py-3 rounded-xl bg-red-600 hover:bg-red-500 font-bold text-sm">SELL NOW</button>
+      </div>
+      <div id="sellLimitSection" class="hidden">
+        <div class="bg-white/5 rounded-xl p-3 mb-3">
+          <p class="text-[10px] text-white/40 mb-1">TARGET PRICE</p>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-white/40">$</span>
+            <input id="sellLimitPrice" type="number" step="any" class="flex-1 bg-transparent text-white font-mono text-sm outline-none" placeholder="0.00">
+          </div>
+        </div>
+        <div class="bg-white/5 rounded-xl p-3 mb-3">
+          <p class="text-[10px] text-white/40 mb-1">AMOUNT %</p>
+          <div class="flex gap-2">
+            <button onclick="setLimitPct(25)" class="limit-pct-btn flex-1 py-1.5 rounded-lg text-xs bg-white/5 border border-white/10">25%</button>
+            <button onclick="setLimitPct(50)" class="limit-pct-btn flex-1 py-1.5 rounded-lg text-xs bg-white/5 border border-white/10">50%</button>
+            <button onclick="setLimitPct(75)" class="limit-pct-btn flex-1 py-1.5 rounded-lg text-xs bg-white/5 border border-white/10">75%</button>
+            <button onclick="setLimitPct(100)" class="limit-pct-btn flex-1 py-1.5 rounded-lg text-xs bg-emerald-600 text-white">100%</button>
+          </div>
+        </div>
+        <button onclick="placeLimitOrder()" class="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-500 font-bold text-sm">PLACE LIMIT ORDER</button>
+      </div>
     </div>
   </div>
   <p class="text-center text-[11px] text-white/20 py-4">Bukan financial advice • Data: DexScreener + RugCheck + CoinGecko • 95% meme coin mati &lt;90 hari • Selalu cek holder, liquidity lock, whale concentration</p>
@@ -976,10 +1076,10 @@ async function trackWhale(){
 async function loadPaper(){
   try{
     const r=await fetch('/api/paper/portfolio'); const j=await r.json();
-    // fetch live prices
     let livePrices={};
     try{ const pr=await fetch('/api/paper/prices'); const pj=await pr.json(); livePrices=pj.prices||{}; }catch(e){}
     let totalU=0;
+    _paperPositions={};
     document.getElementById('paperStats').innerHTML=`<div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">BALANCE</p><p class="mono font-bold">$${j.balance_usd.toFixed(2)}</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">REALIZED PNL</p><p class="mono font-bold ${j.total_pnl>=0?'text-emerald-400':'text-red-400'}">$${j.total_pnl.toFixed(2)}</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">UNREALIZED PNL</p><p class="mono font-bold" id="paperU">...</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">WIN/LOSS</p><p class="mono font-bold">${j.win_trades}/${j.loss_trades}</p></div>`;
     const posEl=document.getElementById('paperPositions');
     const entries=Object.entries(j.positions);
@@ -990,10 +1090,12 @@ async function loadPaper(){
       totalU+=uPnl;
       const roi=pos.entry_price?((cur-pos.entry_price)/pos.entry_price*100):0;
       const roiC=roi>=0?'text-emerald-400':'text-red-400';
+      _paperPositions[mint]={...pos, current_price:cur};
       return `<div class="bg-white/5 rounded-xl p-3 flex justify-between items-center"><div><p class="mono font-bold text-xs">${pos.symbol} ${mint.slice(0,6)}... <span class="${roiC} text-[11px]">${roi>0?'+':''}${roi.toFixed(1)}%</span></p><p class="text-[11px] mono">${pos.amount.toFixed(2)} @ $${pos.entry_price.toFixed(6)} <span class="text-white/40">now $${cur.toFixed(6)}</span></p><p class="text-[10px] ${uPnl>=0?'text-emerald-400':'text-red-400'}">PnL $${uPnl.toFixed(2)}</p></div><button onclick="paperSellFor('${mint}')" class="px-3 py-1 rounded-full bg-red-600 text-xs">SELL</button></div>`}).join('');}
     const uEl=document.getElementById('paperU');
     if(uEl){ const uc=totalU>=0?'text-emerald-400':'text-red-400'; uEl.className='mono font-bold '+uc; uEl.textContent='$'+totalU.toFixed(2); }
     document.getElementById('paperTrades').innerHTML = j.trades.slice(-20).reverse().map(t=>`<div class="flex justify-between bg-white/5 rounded-lg px-3 py-1.5"><span class="${t.type==='BUY'?'text-emerald-400':'text-red-400'}">${t.type} ${t.symbol}</span><span class="mono">$${t.price?.toFixed(6)} x ${t.amount?.toFixed(2)} ${t.pnl!=null ? 'PNL $'+t.pnl.toFixed(2)+' ('+t.pnl_pct?.toFixed(1)+'%)':''}</span><span class="text-white/30">${new Date(t.time).toLocaleTimeString()}</span></div>`).join('');
+    loadLimitOrders();
   }catch(e){ console.error(e); }
 }
 let _paperTimer=null;
@@ -1035,15 +1137,75 @@ async function paperBuyFor(mint,symbol,price){ if(_paperBusy) return; if(!price)
   showTab('bagger'); loadPaper(); startPaperAutoRefresh();
 }finally{ _paperBusy=false; } }
 async function paperSell(){ if(_paperBusy) return; const mint=document.getElementById('paperMint').value.trim(); const price=parseFloat(document.getElementById('paperPrice').value); if(!mint||!price) return; _paperBusy=true; try{ const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price, pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }finally{ _paperBusy=false; } }
-async function paperSellFor(mint){ if(_paperBusy) return; if(_tradeMode==='real'){
-  const amt=prompt('Token amount to sell?'); if(!amt) return; _paperBusy=true;
-  try{ const r=await fetch('/api/trade/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, token_amount:parseFloat(amt)})}); const j=await r.json(); if(j.error) alert('ERROR: '+j.error); else alert('SELL sent! TX: '+j.tx); loadPaper(); }finally{ _paperBusy=false; }
-} else {
-  // fetch current price dulu biar user tau angka bener
-  let curPrice='-'; try{ const r=await fetch('/api/paper/prices'); const j=await r.json(); curPrice=j.prices?.[mint]||'-'; }catch(e){}
-  const price=prompt('Sell price? (current: $'+curPrice+')'); if(!price) return; _paperBusy=true;
-  try{ const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price:parseFloat(price), pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }finally{ _paperBusy=false; }
-} }
+
+// --- SELL MODAL ---
+let _sellMint='', _sellSymbol='', _sellEntry=0, _sellAmount=0, _sellCurPrice=0, _sellPct=100, _limitPct=100, _sellMode='market';
+function openSellModal(mint,symbol,entry,amount,curPrice){
+  _sellMint=mint; _sellSymbol=symbol; _sellEntry=entry; _sellAmount=amount; _sellCurPrice=curPrice; _sellPct=100;
+  document.getElementById('sellSym').textContent=symbol;
+  const roi=entry?((curPrice-entry)/entry*100):0;
+  const roiC=roi>=0?'text-emerald-400':'text-red-400';
+  document.getElementById('sellInfo').innerHTML='Entry: $'+entry.toFixed(6)+' | Now: $'+curPrice.toFixed(6)+' <span class="'+roiC+'">'+(roi>0?'+':'')+roi.toFixed(1)+'%</span><br>Holdings: '+amount.toFixed(2)+' tokens ($'+(amount*curPrice).toFixed(2)+')';
+  setSellPct(100);
+  setSellMode('market');
+  document.getElementById('sellModal').classList.remove('hidden');
+}
+function closeSellModal(){ document.getElementById('sellModal').classList.add('hidden'); }
+function setSellMode(mode){
+  _sellMode=mode;
+  document.getElementById('sellModeMarket').className=mode==='market'?'flex-1 py-2 rounded-xl text-sm font-bold bg-emerald-600 text-white':'flex-1 py-2 rounded-xl text-sm text-white/50 bg-white/5 border border-white/10';
+  document.getElementById('sellModeLimit').className=mode==='limit'?'flex-1 py-2 rounded-xl text-sm font-bold bg-amber-600 text-white':'flex-1 py-2 rounded-xl text-sm text-white/50 bg-white/5 border border-white/10';
+  document.getElementById('sellMarketSection').classList.toggle('hidden',mode!=='market');
+  document.getElementById('sellLimitSection').classList.toggle('hidden',mode!=='limit');
+}
+function setSellPct(pct){
+  _sellPct=pct;
+  document.querySelectorAll('.sell-pct-btn').forEach(b=>{b.className='sell-pct-btn flex-1 py-2 rounded-lg text-xs '+(b.textContent===pct+'%'?'bg-emerald-600 text-white':'bg-white/5 border border-white/10 hover:bg-white/10')});
+  const amt=_sellAmount*(pct/100);
+  document.getElementById('sellAmountInput').value=amt.toFixed(2);
+  updateSellEst();
+}
+function setLimitPct(pct){
+  _limitPct=pct;
+  document.querySelectorAll('.limit-pct-btn').forEach(b=>{b.className='limit-pct-btn flex-1 py-1.5 rounded-lg text-xs '+(b.textContent===pct+'%'?'bg-amber-600 text-white':'bg-white/5 border border-white/10')});
+}
+function updateSellEst(){
+  const amt=parseFloat(document.getElementById('sellAmountInput').value)||0;
+  const est=amt*_sellCurPrice;
+  document.getElementById('sellEstUsd').textContent='$'+est.toFixed(2);
+}
+async function executeSell(){
+  if(_paperBusy) return; _paperBusy=true;
+  const amt=parseFloat(document.getElementById('sellAmountInput').value)||0;
+  const pct=(_sellAmount>0)?(amt/_sellAmount*100):100;
+  try{
+    const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint:_sellMint, price:_sellCurPrice, pct:pct})});
+    const j=await r.json();
+    if(j.error) alert(j.error);
+    else{ closeSellModal(); loadPaper(); }
+  }finally{ _paperBusy=false; }
+}
+async function placeLimitOrder(){
+  const price=parseFloat(document.getElementById('sellLimitPrice').value)||0;
+  if(!price) return alert('target price required');
+  try{
+    const r=await fetch('/api/paper/limit-order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint:_sellMint, symbol:_sellSymbol, target_price:price, pct:_limitPct})});
+    const j=await r.json();
+    if(j.error) alert(j.error); else{ alert('Limit order placed! Target $'+price); closeSellModal(); loadPaper(); }
+  }catch(e){ alert('Error: '+e.message); }
+}
+async function resetPortfolio(){ if(!confirm('Reset portfolio ke $10k? Semua posisi & trade history akan dihapus.')) return; try{ const r=await fetch('/api/paper/reset',{method:'POST'}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }catch(e){} }
+async function loadLimitOrders(){
+  try{ const r=await fetch('/api/paper/limit-orders'); const j=await r.json(); const box=document.getElementById('paperOrders'); const list=document.getElementById('paperOrdersList');
+    if(!j.orders||!j.orders.length){ box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    list.innerHTML=j.orders.map(o=>'<div class="flex justify-between items-center bg-white/5 rounded-lg px-3 py-2 text-xs"><span class="mono">'+o.symbol+' $'+o.target_price+' ('+o.pct+'%)</span><button onclick="cancelOrder(\''+o.id+'\')" class="text-red-400 text-[10px]">cancel</button></div>').join('');
+  }catch(e){}
+}
+async function cancelOrder(id){ try{ await fetch('/api/paper/limit-order/'+id,{method:'DELETE'}); loadLimitOrders(); }catch(e){} }
+
+function paperSellFor(mint){ const pos=_paperPositions?.[mint]; if(!pos) return alert('position not found'); openSellModal(mint, pos.symbol, pos.entry_price, pos.amount, pos.current_price||pos.entry_price); }
+let _paperPositions={};
 function setMint(m){ document.getElementById('mintInput').value=m; doScreen(); }
 
 async function doScreen(isAuto=false){
