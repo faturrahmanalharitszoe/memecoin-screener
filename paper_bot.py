@@ -3,36 +3,56 @@ Based Bot - Paper trade dulu, siap real via Jupiter
 """
 import json
 import os
-import time
+import base64
 from datetime import datetime, timezone
 
-_dir = os.environ.get("PAPER_DIR", "/tmp" if os.path.exists("/tmp") else os.path.dirname(os.path.abspath(__file__)))
-PAPER_FILE = os.path.join(_dir, "paper_portfolio.json")
 INITIAL_BALANCE = 10000  # $10k paper
 
-def load_portfolio():
-    if os.path.exists(PAPER_FILE):
+def _load_from_env():
+    """Load portfolio dari env var (persistent across restarts)"""
+    data = os.environ.get("PAPER_PORTFOLIO", "")
+    if data:
         try:
-            with open(PAPER_FILE, "r") as f:
-                return json.load(f)
+            return json.loads(base64.b64decode(data).decode("utf-8"))
         except:
             pass
+    return None
+
+def _save_to_env(port):
+    """Save portfolio ke env var via runtime os.environ (persist di memory selama process hidup)"""
+    try:
+        encoded = base64.b64encode(json.dumps(port).encode("utf-8")).decode("utf-8")
+        os.environ["PAPER_PORTFOLIO"] = encoded
+    except:
+        pass
+
+def _new_portfolio():
     return {
         "balance_usd": INITIAL_BALANCE,
-        "positions": {},  # mint -> {amount, entry_price, entry_time, size_usd}
-        "trades": [],  # history
+        "positions": {},
+        "trades": [],
         "total_pnl": 0,
         "win_trades": 0,
         "loss_trades": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
+# In-memory cache (survives as long as process lives)
+_PORT = None
+
+def load_portfolio():
+    global _PORT
+    if _PORT is not None:
+        return _PORT
+    _PORT = _load_from_env() or _new_portfolio()
+    return _PORT
+
 def save_portfolio(port):
-    with open(PAPER_FILE, "w") as f:
-        json.dump(port, f, indent=2)
+    global _PORT
+    _PORT = port
+    _save_to_env(port)
 
 def paper_buy(mint, symbol, price, size_pct=2, reason="bagger signal"):
-    """Paper buy 2% portfolio"""
     port = load_portfolio()
     size_usd = port["balance_usd"] * (size_pct / 100)
     if size_usd < 10:
@@ -41,13 +61,10 @@ def paper_buy(mint, symbol, price, size_pct=2, reason="bagger signal"):
         return {"error": "insufficient balance"}
     
     amount = size_usd / price if price else 0
-    # deduct balance
     port["balance_usd"] -= size_usd
-    # add position
     if mint not in port["positions"]:
         port["positions"][mint] = {"symbol": symbol, "amount": 0, "entry_price": price, "entry_time": datetime.now(timezone.utc).isoformat(), "size_usd": 0}
     pos = port["positions"][mint]
-    # avg entry
     total_amount = pos["amount"] + amount
     total_cost = pos["size_usd"] + size_usd
     pos["entry_price"] = total_cost / total_amount if total_amount else price
@@ -55,22 +72,15 @@ def paper_buy(mint, symbol, price, size_pct=2, reason="bagger signal"):
     pos["size_usd"] = total_cost
     
     trade = {
-        "type": "BUY",
-        "mint": mint,
-        "symbol": symbol,
-        "price": price,
-        "amount": amount,
-        "size_usd": size_usd,
-        "reason": reason,
-        "time": datetime.now(timezone.utc).isoformat(),
-        "paper": True,
+        "type": "BUY", "mint": mint, "symbol": symbol, "price": price,
+        "amount": amount, "size_usd": size_usd, "reason": reason,
+        "time": datetime.now(timezone.utc).isoformat(), "paper": True,
     }
     port["trades"].append(trade)
     save_portfolio(port)
     return {"ok": True, "trade": trade, "portfolio": get_portfolioSummary(port)}
 
 def paper_sell(mint, price, pct=100, reason="take profit"):
-    """Paper sell pct of position"""
     port = load_portfolio()
     if mint not in port["positions"]:
         return {"error": "no position"}
@@ -81,7 +91,6 @@ def paper_sell(mint, price, pct=100, reason="take profit"):
     pnl = sell_usd - entry_usd
     pnl_pct = (pnl / entry_usd * 100) if entry_usd else 0
 
-    # update position
     pos["amount"] -= sell_amount
     pos["size_usd"] -= entry_usd
     if pos["amount"] <= 0.000001:
@@ -95,31 +104,16 @@ def paper_sell(mint, price, pct=100, reason="take profit"):
         port["loss_trades"] += 1
 
     trade = {
-        "type": "SELL",
-        "mint": mint,
-        "symbol": pos.get("symbol", ""),
-        "price": price,
-        "amount": sell_amount,
-        "size_usd": sell_usd,
-        "pnl": pnl,
-        "pnl_pct": pnl_pct,
-        "reason": reason,
-        "time": datetime.now(timezone.utc).isoformat(),
-        "paper": True,
+        "type": "SELL", "mint": mint, "symbol": pos.get("symbol", ""),
+        "price": price, "amount": sell_amount, "size_usd": sell_usd,
+        "pnl": pnl, "pnl_pct": pnl_pct, "reason": reason,
+        "time": datetime.now(timezone.utc).isoformat(), "paper": True,
     }
     port["trades"].append(trade)
     save_portfolio(port)
     return {"ok": True, "trade": trade, "portfolio": get_portfolioSummary(port), "pnl": pnl, "pnl_pct": pnl_pct}
 
-def check_tp_sl():
-    """Cek TP 100% (2x) dan SL -50% untuk semua posisi - dipanggil tiap price poll"""
-    port = load_portfolio()
-    # perlu fetch price live untuk tiap posisi - akan dipanggil dari dashboard dengan price terbaru
-    # untuk sekarang, return info aja
-    return port
-
 def get_portfolioSummary(port=None):
-    """Return portfolio dengan unrealized PnL per posisi"""
     if port is None:
         port = load_portfolio()
     pos_summary = {}
@@ -128,18 +122,14 @@ def get_portfolioSummary(port=None):
         entry = pos.get("entry_price", 0)
         amount = pos.get("amount", 0)
         size = pos.get("size_usd", 0)
-        # current_price diisi dari price poll luar, default entry
         current = pos.get("current_price", entry)
         unrealized = (current - entry) * amount if current and entry else 0
         roi_pct = ((current - entry) / entry * 100) if entry and current else 0
         total_unrealized += unrealized
         pos_summary[mint] = {
-            "symbol": pos.get("symbol", ""),
-            "amount": amount,
-            "entry_price": entry,
-            "current_price": current,
-            "size_usd": size,
-            "unrealized_pnl": round(unrealized, 2),
+            "symbol": pos.get("symbol", ""), "amount": amount,
+            "entry_price": entry, "current_price": current,
+            "size_usd": size, "unrealized_pnl": round(unrealized, 2),
             "roi_pct": round(roi_pct, 1),
         }
     total_value = port.get("balance_usd", 0) + sum(p["size_usd"] for p in pos_summary.values()) + total_unrealized
@@ -154,15 +144,8 @@ def get_portfolioSummary(port=None):
         "trades": port.get("trades", [])[-10:],
     }
 
-
 def get_portfolio():
     return get_portfolioSummary()
 
-# Real trade via Jupiter (siap, tapi paper dulu)
 def real_trade_via_jupiter(mint, amount, side="buy"):
-    """Siap untuk real trade - butuh private key dan RPC. Untuk sekarang return paper."""
-    # TODO: integrasi Jupiter Swap API
-    # POST https://quote-api.jup.ag/v6/quote?inputMint=So111...&outputMint={mint}&amount={amount}&slippageBps=100
-    # POST https://quote-api.jup.ag/v6/swap
-    # sign & send via solana-py
-    return {"paper": True, "message": "Real trade siap - set PRIVATE_KEY env dan uncomment Jupiter code di paper_bot.py:real_trade_via_jupiter"}
+    return {"paper": True, "message": "Real trade siap - set PRIVATE_KEY env"}
