@@ -15,12 +15,15 @@ def _get_sb():
     url = os.environ.get("SUPABASE_URL", "")
     key = os.environ.get("SUPABASE_KEY", "")
     if not url or not key:
+        print("[PAPER] SUPABASE_URL or SUPABASE_KEY not set")
         return None
     try:
         from supabase import create_client
         _sb = create_client(url, key)
+        print("[PAPER] Supabase connected OK")
         return _sb
-    except:
+    except Exception as e:
+        print("[PAPER] Supabase init error:", e)
         return None
 
 INITIAL_BALANCE = 10000  # $10k paper
