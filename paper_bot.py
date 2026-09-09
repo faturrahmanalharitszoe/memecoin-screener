@@ -132,6 +132,10 @@ def paper_sell(mint, price, pct=100, reason="take profit"):
         if mint not in positions:
             return {"error": "no position"}
         pos = positions[mint]
+        entry = float(pos["entry_price"])
+        # Validasi: harga sell gak boleh 50x lipat dari entry (typo guard)
+        if entry > 0 and (price > entry * 50 or price < entry / 50):
+            return {"error": "Harga suspicious! Entry $" + str(round(entry, 6)) + " tapi sell $" + str(round(price, 6)) + ". Cek lagi."}
         sell_amount = float(pos["amount"]) * (pct / 100)
         sell_usd = sell_amount * price
         entry_usd = sell_amount * float(pos["entry_price"])

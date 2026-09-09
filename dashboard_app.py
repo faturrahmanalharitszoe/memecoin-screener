@@ -1039,7 +1039,9 @@ async function paperSellFor(mint){ if(_paperBusy) return; if(_tradeMode==='real'
   const amt=prompt('Token amount to sell?'); if(!amt) return; _paperBusy=true;
   try{ const r=await fetch('/api/trade/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, token_amount:parseFloat(amt)})}); const j=await r.json(); if(j.error) alert('ERROR: '+j.error); else alert('SELL sent! TX: '+j.tx); loadPaper(); }finally{ _paperBusy=false; }
 } else {
-  const price=prompt('sell price?'); if(!price) return; _paperBusy=true;
+  // fetch current price dulu biar user tau angka bener
+  let curPrice='-'; try{ const r=await fetch('/api/paper/prices'); const j=await r.json(); curPrice=j.prices?.[mint]||'-'; }catch(e){}
+  const price=prompt('Sell price? (current: $'+curPrice+')'); if(!price) return; _paperBusy=true;
   try{ const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price:parseFloat(price), pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }finally{ _paperBusy=false; }
 } }
 function setMint(m){ document.getElementById('mintInput').value=m; doScreen(); }
