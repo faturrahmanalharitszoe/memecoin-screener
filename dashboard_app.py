@@ -567,6 +567,60 @@ def api_paper_sell():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/trade/config")
+def api_trade_config():
+    """Check apakah real trade sudah dikonfigurasi"""
+    try:
+        from real_trade import is_configured, get_sol_balance
+        configured = is_configured()
+        balance = None
+        if configured:
+            balance, _ = get_sol_balance()
+        return jsonify({"configured": configured, "balance": balance})
+    except Exception as e:
+        return jsonify({"configured": False, "error": str(e)})
+
+@app.route("/api/trade/buy", methods=["POST"])
+def api_real_buy():
+    try:
+        data = request.get_json() or {}
+        mint = data.get("mint")
+        amount_sol = float(data.get("amount_sol") or 0)
+        if not mint or not amount_sol:
+            return jsonify({"error": "mint & amount_sol required"}), 400
+        from real_trade import real_buy
+        res = real_buy(mint, amount_sol)
+        # update paper portfolio juga sebagai record
+        if res.get("ok"):
+            try:
+                from paper_bot import paper_buy
+                # hitung price dari out_amount
+                price = (amount_sol * 1e9) / res.get("tokens_received", 1) if res.get("tokens_received") else 0
+                paper_buy(mint, data.get("symbol", mint[:6]), price, 0, "real_buy")
+            except:
+                pass
+        return jsonify(res)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/trade/sell", methods=["POST"])
+def api_real_sell():
+    try:
+        data = request.get_json() or {}
+        mint = data.get("mint")
+        token_amount = float(data.get("token_amount") or 0)
+        if not mint or not token_amount:
+            return jsonify({"error": "mint & token_amount required"}), 400
+        from real_trade import real_sell
+        res = real_sell(mint, token_amount)
+        return jsonify(res)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/")
 def index():
     return HTML
@@ -825,8 +879,16 @@ HTML = r"""
     </div>
     <div class="glass rounded-2xl p-5">
       <div class="flex items-center justify-between">
-        <div><h3 class="font-bold">🤖 Based Bot - Paper</h3><p class="text-xs text-white/50">Terhubung ke Bagger - klik Paper BUY di bagger buat entry. Saldo $10k paper, siap real Jupiter.</p></div>
-        <button onclick="loadPaper()" class="bg-white/5 border border-white/10 px-4 py-2 rounded-xl text-sm">Refresh</button>
+        <div><h3 class="font-bold">🤖 Based Bot</h3><p class="text-xs text-white/50">Trading bot - Paper mode atau Real mode via Jupiter.</p></div>
+        <div class="flex items-center gap-3">
+          <div id="tradeModeInfo" class="text-xs text-white/40"></div>
+          <button onclick="loadPaper()" class="bg-white/5 border border-white/10 px-4 py-2 rounded-xl text-sm">Refresh</button>
+        </div>
+      </div>
+      <div class="flex items-center gap-3 mt-3">
+        <label class="text-xs text-white/50">Mode:</label>
+        <button id="modePaper" onclick="setTradeMode('paper')" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white">Paper</button>
+        <button id="modeReal" onclick="setTradeMode('real')" class="px-3 py-1.5 rounded-lg text-xs text-white/50 bg-white/5 border border-white/10">Real (Jupiter)</button>
       </div>
       <div id="paperStats" class="grid grid-cols-3 gap-3 mt-4"></div>
       <div id="paperPositions" class="mt-4 space-y-2"></div>
@@ -896,7 +958,7 @@ async function scanBagger(){
     if(!j.baggers.length){ list.innerHTML='<div class="text-center py-8 text-white/30">Gak ada bagger hari ini - coba Mode Relaxed atau Beyond trending</div>'; return; }
     list.innerHTML=j.baggers.map(b=>`<div class="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-wrap gap-3 items-center justify-between">
       <div><p class="font-bold mono">${b.symbol || b.mint.slice(0,6)} <span class="text-white/50 text-xs">${b.mint.slice(0,6)}...${b.mint.slice(-4)}</span></p><p class="text-xs mono">mcap $${(b.mcap||0).toLocaleString()} | holders ${b.holders?.toLocaleString()||'-'} | top10 ${b.top10?.toFixed(1)}% | score ${b.score} | social ${b.social}</p><p class="text-[11px] text-white/40 mt-1">${b.reason}</p></div>
-      <div class="flex gap-2"><a href="${b.pairUrl}" target="_blank" class="px-3 py-2 rounded-full bg-white/10 text-xs">Dex ↗</a><button onclick="document.getElementById('mintInput').value='${b.mint}'; showTab('screener'); doScreen();" class="px-3 py-2 rounded-full bg-violet-600 text-xs font-bold">Screen</button><button onclick="paperBuyFor('${b.mint}','${b.symbol||''}',${b.price||0})" class="px-3 py-2 rounded-full bg-emerald-600 text-xs font-bold">Paper BUY</button></div>
+      <div class="flex gap-2"><a href="${b.pairUrl}" target="_blank" class="px-3 py-2 rounded-full bg-white/10 text-xs">Dex ↗</a><button onclick="document.getElementById('mintInput').value='${b.mint}'; showTab('screener'); doScreen();" class="px-3 py-2 rounded-full bg-violet-600 text-xs font-bold">Screen</button><button onclick="paperBuyFor('${b.mint}','${b.symbol||''}',${b.price||0})" class="px-3 py-2 rounded-full ${_tradeMode==='real'?'bg-red-600':'bg-emerald-600'} text-xs font-bold">${_tradeMode==='real'?'BUY (Real)':'Paper BUY'}</button></div>
     </div>`).join('');
   }catch(e){ status.textContent='Error: '+e.message; }
   finally{ btn.disabled=false; btn.textContent='🔍 Scan Bagger'; }
@@ -937,11 +999,49 @@ async function loadPaper(){
 let _paperTimer=null;
 function startPaperAutoRefresh(){ if(_paperTimer) return; _paperTimer=setInterval(()=>{ const tab=document.getElementById('tab-bagger'); if(tab && !tab.classList.contains('hidden')) loadPaper(); },10000); }
 function stopPaperAutoRefresh(){ if(_paperTimer){ clearInterval(_paperTimer); _paperTimer=null; } }
+
+// --- Trade Mode (Paper/Real) ---
+let _tradeMode='paper';
+async function setTradeMode(mode){
+  _tradeMode=mode;
+  document.getElementById('modePaper').className=mode==='paper'?'px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white':'px-3 py-1.5 rounded-lg text-xs text-white/50 bg-white/5 border border-white/10';
+  document.getElementById('modeReal').className=mode==='real'?'px-3 py-1.5 rounded-lg text-xs font-bold bg-red-600 text-white':'px-3 py-1.5 rounded-lg text-xs text-white/50 bg-white/5 border border-white/10';
+  if(mode==='real'){
+    try{ const r=await fetch('/api/trade/config'); const j=await r.json();
+      if(j.configured){
+        document.getElementById('tradeModeInfo').innerHTML='<span class="text-emerald-400">Real ON</span> | SOL: '+(j.balance?.sol?.toFixed(4)||'?')+' | Wallet: '+(j.balance?.address?.slice(0,8)||'?')+'...';
+      } else {
+        document.getElementById('tradeModeInfo').innerHTML='<span class="text-red-400">Real OFF</span> - set SOLANA_RPC & PRIVATE_KEY';
+        _tradeMode='paper'; setTradeMode('paper');
+      }
+    }catch(e){ document.getElementById('tradeModeInfo').textContent='Error checking config'; }
+  } else {
+    document.getElementById('tradeModeInfo').innerHTML='<span class="text-emerald-400">Paper mode</span> - $10k virtual balance';
+  }
+  loadPaper();
+}
+
 let _paperBusy=false;
 async function paperBuy(){ if(_paperBusy) return; const mint=document.getElementById('paperMint').value.trim(); const price=parseFloat(document.getElementById('paperPrice').value); if(!mint||!price) return alert('mint & price'); _paperBusy=true; try{ const r=await fetch('/api/paper/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price, symbol:mint.slice(0,6), size_pct:2})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }finally{ _paperBusy=false; } }
-async function paperBuyFor(mint,symbol,price){ if(_paperBusy) return; if(!price) { const p=prompt('price?'); price=parseFloat(p); } if(!price) return; _paperBusy=true; try{ const r=await fetch('/api/paper/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, symbol, price, size_pct:2})}); const j=await r.json(); if(j.error) alert(j.error); else { showTab('bagger'); loadPaper(); startPaperAutoRefresh(); } }finally{ _paperBusy=false; } }
+async function paperBuyFor(mint,symbol,price){ if(_paperBusy) return; if(!price) { const p=prompt('price?'); price=parseFloat(p); } if(!price) return; _paperBusy=true; try{
+  if(_tradeMode==='real'){
+    const solAmt=prompt('SOL amount to spend? (e.g. 0.01)'); if(!solAmt) return _paperBusy=false;
+    const r=await fetch('/api/trade/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, symbol, amount_sol:parseFloat(solAmt)})});
+    const j=await r.json(); if(j.error) alert('ERROR: '+j.error); else alert('BUY sent! TX: '+j.tx);
+  } else {
+    const r=await fetch('/api/paper/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, symbol, price, size_pct:2})});
+    const j=await r.json(); if(j.error) alert(j.error);
+  }
+  showTab('bagger'); loadPaper(); startPaperAutoRefresh();
+}finally{ _paperBusy=false; } }
 async function paperSell(){ if(_paperBusy) return; const mint=document.getElementById('paperMint').value.trim(); const price=parseFloat(document.getElementById('paperPrice').value); if(!mint||!price) return; _paperBusy=true; try{ const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price, pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }finally{ _paperBusy=false; } }
-async function paperSellFor(mint){ if(_paperBusy) return; const price=prompt('sell price?'); if(!price) return; _paperBusy=true; try{ const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price:parseFloat(price), pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }finally{ _paperBusy=false; } }
+async function paperSellFor(mint){ if(_paperBusy) return; if(_tradeMode==='real'){
+  const amt=prompt('Token amount to sell?'); if(!amt) return; _paperBusy=true;
+  try{ const r=await fetch('/api/trade/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, token_amount:parseFloat(amt)})}); const j=await r.json(); if(j.error) alert('ERROR: '+j.error); else alert('SELL sent! TX: '+j.tx); loadPaper(); }finally{ _paperBusy=false; }
+} else {
+  const price=prompt('sell price?'); if(!price) return; _paperBusy=true;
+  try{ const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price:parseFloat(price), pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }finally{ _paperBusy=false; }
+} }
 function setMint(m){ document.getElementById('mintInput').value=m; doScreen(); }
 
 async function doScreen(isAuto=false){
