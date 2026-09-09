@@ -204,6 +204,42 @@ def delete_trade(trade_id):
     if not sb:
         return {"error": "Supabase not configured"}
     try:
+        # ambil trade dulu sebelum hapus
+        res = sb.table("paper_trades").select("*").eq("id", trade_id).execute()
+        if not res.data:
+            return {"error": "trade not found"}
+        trade = res.data[0]
+        pid = trade["portfolio_id"]
+        port_res = sb.table("paper_portfolios").select("*").eq("id", pid).execute()
+        if not port_res.data:
+            return {"error": "portfolio not found"}
+        port = port_res.data[0]
+        balance = float(port["balance_usd"])
+        total_pnl = float(port["total_pnl"])
+        wins = int(port["win_trades"])
+        losses = int(port["loss_trades"])
+
+        ttype = trade.get("type", "")
+        if ttype == "BUY":
+            # reverse BUY: tambah balik size_usd ke balance
+            balance += float(trade.get("size_usd", 0))
+        elif ttype == "SELL":
+            # reverse SELL: kurang balik sell_usd dari balance, reverse PnL
+            balance -= float(trade.get("size_usd", 0))
+            pnl = float(trade.get("pnl", 0))
+            total_pnl -= pnl
+            if pnl > 0:
+                wins -= 1
+            else:
+                losses -= 1
+
+        sb.table("paper_portfolios").update({
+            "balance_usd": balance,
+            "total_pnl": total_pnl,
+            "win_trades": max(0, wins),
+            "loss_trades": max(0, losses),
+        }).eq("id", pid).execute()
+
         sb.table("paper_trades").delete().eq("id", trade_id).execute()
         return {"ok": True}
     except Exception as e:
