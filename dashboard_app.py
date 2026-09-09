@@ -509,6 +509,28 @@ def api_paper_portfolio():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/paper/prices")
+def api_paper_prices():
+    """Fetch live prices untuk semua posisi - dipanggil auto-refresh"""
+    try:
+        from paper_bot import get_portfolio
+        port = get_portfolio()
+        mints = list(port.get("positions", {}).keys())
+        prices = {}
+        for mint in mints[:8]:
+            try:
+                from meme_screener import fetch_dexscreener
+                dex, _ = fetch_dexscreener(mint)
+                if dex:
+                    p = dex.get("price_usd") or dex.get("base_token_price_usd")
+                    if p:
+                        prices[mint] = float(p)
+            except:
+                pass
+        return jsonify({"prices": prices})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/paper/buy", methods=["POST"])
 def api_paper_buy():
     try:
@@ -852,7 +874,8 @@ function showTab(name){
   document.getElementById('tab-'+name).classList.remove('hidden');
   document.querySelectorAll('.tab-btn').forEach(b=>{b.classList.remove('bg-violet-600'); b.classList.add('bg-white/5','border','border-white/10')});
   document.getElementById('tab-btn-'+name).classList.add('bg-violet-600'); document.getElementById('tab-btn-'+name).classList.remove('bg-white/5','border','border-white/10');
-  if(name==='bagger'){ if(!document.getElementById('baggerList').innerHTML) scanBagger(); loadPaper(); }
+  if(name==='bagger'){ if(!document.getElementById('baggerList').innerHTML) scanBagger(); loadPaper(); startPaperAutoRefresh(); }
+  else{ stopPaperAutoRefresh(); }
 }
 async function scanBagger(){
   const btn=document.getElementById('btnBagger'); const status=document.getElementById('baggerStatus'); const list=document.getElementById('baggerList');
@@ -891,17 +914,34 @@ async function trackWhale(){
 async function loadPaper(){
   try{
     const r=await fetch('/api/paper/portfolio'); const j=await r.json();
-    const uPnl = j.total_unrealized||0;
-    const uClass = uPnl>=0?'text-emerald-400':'text-red-400';
-    document.getElementById('paperStats').innerHTML=`<div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">BALANCE</p><p class="mono font-bold">$${j.balance_usd.toFixed(2)}</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">REALIZED PNL</p><p class="mono font-bold ${j.total_pnl>=0?'text-emerald-400':'text-red-400'}">$${j.total_pnl.toFixed(2)}</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">UNREALIZED PNL</p><p class="mono font-bold ${uClass}">$${uPnl.toFixed(2)}</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">WIN/LOSS</p><p class="mono font-bold">${j.win_trades}/${j.loss_trades}</p></div>`;
-    document.getElementById('paperPositions').innerHTML = Object.keys(j.positions).length ? Object.entries(j.positions).map(([mint,pos])=>{const roi=pos.roi_pct||0; const roiC=roi>=0?'text-emerald-400':'text-red-400'; return `<div class="bg-white/5 rounded-xl p-3 flex justify-between items-center"><div><p class="mono font-bold text-xs">${pos.symbol} ${mint.slice(0,6)}... <span class="${roiC} text-[11px]">${roi>0?'+':''}${roi.toFixed(1)}%</span></p><p class="text-[11px] mono">${pos.amount.toFixed(2)} @ $${pos.entry_price.toFixed(6)} ($${pos.size_usd.toFixed(2)})</p><p class="text-[10px] ${uClass}">PnL $${pos.unrealized_pnl.toFixed(2)}</p></div><button onclick="paperSellFor('${mint}')" class="px-3 py-1 rounded-full bg-red-600 text-xs">SELL</button></div>`}).join('') : '<p class="text-xs text-white/30">No positions - scan bagger & paper BUY</p>';
+    // fetch live prices
+    let livePrices={};
+    try{ const pr=await fetch('/api/paper/prices'); const pj=await pr.json(); livePrices=pj.prices||{}; }catch(e){}
+    let totalU=0;
+    document.getElementById('paperStats').innerHTML=`<div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">BALANCE</p><p class="mono font-bold">$${j.balance_usd.toFixed(2)}</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">REALIZED PNL</p><p class="mono font-bold ${j.total_pnl>=0?'text-emerald-400':'text-red-400'}">$${j.total_pnl.toFixed(2)}</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">UNREALIZED PNL</p><p class="mono font-bold" id="paperU">...</p></div><div class="bg-white/5 rounded-xl p-3 text-center"><p class="text-[10px] text-white/40">WIN/LOSS</p><p class="mono font-bold">${j.win_trades}/${j.loss_trades}</p></div>`;
+    const posEl=document.getElementById('paperPositions');
+    const entries=Object.entries(j.positions);
+    if(!entries.length){ posEl.innerHTML='<p class="text-xs text-white/30">No positions - scan bagger & paper BUY</p>'; }
+    else{ posEl.innerHTML=entries.map(([mint,pos])=>{
+      const cur=livePrices[mint]||pos.entry_price;
+      const uPnl=(cur-pos.entry_price)*pos.amount;
+      totalU+=uPnl;
+      const roi=pos.entry_price?((cur-pos.entry_price)/pos.entry_price*100):0;
+      const roiC=roi>=0?'text-emerald-400':'text-red-400';
+      return `<div class="bg-white/5 rounded-xl p-3 flex justify-between items-center"><div><p class="mono font-bold text-xs">${pos.symbol} ${mint.slice(0,6)}... <span class="${roiC} text-[11px]">${roi>0?'+':''}${roi.toFixed(1)}%</span></p><p class="text-[11px] mono">${pos.amount.toFixed(2)} @ $${pos.entry_price.toFixed(6)} <span class="text-white/40">now $${cur.toFixed(6)}</span></p><p class="text-[10px] ${uPnl>=0?'text-emerald-400':'text-red-400'}">PnL $${uPnl.toFixed(2)}</p></div><button onclick="paperSellFor('${mint}')" class="px-3 py-1 rounded-full bg-red-600 text-xs">SELL</button></div>`}).join('');}
+    const uEl=document.getElementById('paperU');
+    if(uEl){ const uc=totalU>=0?'text-emerald-400':'text-red-400'; uEl.className='mono font-bold '+uc; uEl.textContent='$'+totalU.toFixed(2); }
     document.getElementById('paperTrades').innerHTML = j.trades.slice(-20).reverse().map(t=>`<div class="flex justify-between bg-white/5 rounded-lg px-3 py-1.5"><span class="${t.type==='BUY'?'text-emerald-400':'text-red-400'}">${t.type} ${t.symbol}</span><span class="mono">$${t.price?.toFixed(6)} x ${t.amount?.toFixed(2)} ${t.pnl!=null ? 'PNL $'+t.pnl.toFixed(2)+' ('+t.pnl_pct?.toFixed(1)+'%)':''}</span><span class="text-white/30">${new Date(t.time).toLocaleTimeString()}</span></div>`).join('');
   }catch(e){ console.error(e); }
 }
-async function paperBuy(){ const mint=document.getElementById('paperMint').value.trim(); const price=parseFloat(document.getElementById('paperPrice').value); if(!mint||!price) return alert('mint & price'); const r=await fetch('/api/paper/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price, symbol:mint.slice(0,6), size_pct:2})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }
-async function paperBuyFor(mint,symbol,price){ if(!price) { const p=prompt('price?'); price=parseFloat(p); } if(!price) return; const r=await fetch('/api/paper/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, symbol, price, size_pct:2})}); const j=await r.json(); if(j.error) alert(j.error); else { showTab('bagger'); loadPaper(); } }
-async function paperSell(){ const mint=document.getElementById('paperMint').value.trim(); const price=parseFloat(document.getElementById('paperPrice').value); if(!mint||!price) return; const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price, pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }
-async function paperSellFor(mint){ const price=prompt('sell price?'); if(!price) return; const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price:parseFloat(price), pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }
+let _paperTimer=null;
+function startPaperAutoRefresh(){ if(_paperTimer) return; _paperTimer=setInterval(()=>{ const tab=document.getElementById('tab-bagger'); if(tab && !tab.classList.contains('hidden')) loadPaper(); },10000); }
+function stopPaperAutoRefresh(){ if(_paperTimer){ clearInterval(_paperTimer); _paperTimer=null; } }
+let _paperBusy=false;
+async function paperBuy(){ if(_paperBusy) return; const mint=document.getElementById('paperMint').value.trim(); const price=parseFloat(document.getElementById('paperPrice').value); if(!mint||!price) return alert('mint & price'); _paperBusy=true; try{ const r=await fetch('/api/paper/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price, symbol:mint.slice(0,6), size_pct:2})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }finally{ _paperBusy=false; } }
+async function paperBuyFor(mint,symbol,price){ if(_paperBusy) return; if(!price) { const p=prompt('price?'); price=parseFloat(p); } if(!price) return; _paperBusy=true; try{ const r=await fetch('/api/paper/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, symbol, price, size_pct:2})}); const j=await r.json(); if(j.error) alert(j.error); else { showTab('bagger'); loadPaper(); startPaperAutoRefresh(); } }finally{ _paperBusy=false; } }
+async function paperSell(){ if(_paperBusy) return; const mint=document.getElementById('paperMint').value.trim(); const price=parseFloat(document.getElementById('paperPrice').value); if(!mint||!price) return; _paperBusy=true; try{ const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price, pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }finally{ _paperBusy=false; } }
+async function paperSellFor(mint){ if(_paperBusy) return; const price=prompt('sell price?'); if(!price) return; _paperBusy=true; try{ const r=await fetch('/api/paper/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint, price:parseFloat(price), pct:100})}); const j=await r.json(); if(j.error) alert(j.error); else loadPaper(); }finally{ _paperBusy=false; } }
 function setMint(m){ document.getElementById('mintInput').value=m; doScreen(); }
 
 async function doScreen(isAuto=false){
