@@ -576,6 +576,15 @@ def api_paper_reset():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/paper/trade/<trade_id>", methods=["DELETE"])
+def api_delete_trade(trade_id):
+    try:
+        from paper_bot import delete_trade
+        res = delete_trade(trade_id)
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/paper/limit-order", methods=["POST"])
 def api_limit_order():
     try:
@@ -1094,7 +1103,7 @@ async function loadPaper(){
       return `<div class="bg-white/5 rounded-xl p-3 flex justify-between items-center"><div><p class="mono font-bold text-xs">${pos.symbol} ${mint.slice(0,6)}... <span class="${roiC} text-[11px]">${roi>0?'+':''}${roi.toFixed(1)}%</span></p><p class="text-[11px] mono">${pos.amount.toFixed(2)} @ $${pos.entry_price.toFixed(6)} <span class="text-white/40">now $${cur.toFixed(6)}</span></p><p class="text-[10px] ${uPnl>=0?'text-emerald-400':'text-red-400'}">PnL $${uPnl.toFixed(2)}</p></div><button onclick="paperSellFor('${mint}')" class="px-3 py-1 rounded-full bg-red-600 text-xs">SELL</button></div>`}).join('');}
     const uEl=document.getElementById('paperU');
     if(uEl){ const uc=totalU>=0?'text-emerald-400':'text-red-400'; uEl.className='mono font-bold '+uc; uEl.textContent='$'+totalU.toFixed(2); }
-    document.getElementById('paperTrades').innerHTML = j.trades.slice(-20).reverse().map(t=>`<div class="flex justify-between bg-white/5 rounded-lg px-3 py-1.5"><span class="${t.type==='BUY'?'text-emerald-400':'text-red-400'}">${t.type} ${t.symbol}</span><span class="mono">$${t.price?.toFixed(6)} x ${t.amount?.toFixed(2)} ${t.pnl!=null ? 'PNL $'+t.pnl.toFixed(2)+' ('+t.pnl_pct?.toFixed(1)+'%)':''}</span><span class="text-white/30">${new Date(t.time).toLocaleTimeString()}</span></div>`).join('');
+    document.getElementById('paperTrades').innerHTML = j.trades.slice(-20).reverse().map(t=>`<div class="flex justify-between items-center bg-white/5 rounded-lg px-3 py-1.5"><span class="${t.type==='BUY'?'text-emerald-400':'text-red-400'}">${t.type} ${t.symbol}</span><span class="mono flex-1 ml-2">$${t.price?.toFixed(6)} x ${t.amount?.toFixed(2)} ${t.pnl!=null ? 'PNL $'+t.pnl.toFixed(2)+' ('+t.pnl_pct?.toFixed(1)+'%)':''}</span><span class="text-white/30 mr-2">${new Date(t.time).toLocaleTimeString()}</span><button onclick="deleteTrade('${t.id}')" class="text-white/20 hover:text-red-400 text-xs" title="delete">&times;</button></div>`).join('');
     loadLimitOrders();
   }catch(e){ console.error(e); }
 }
@@ -1203,6 +1212,7 @@ async function loadLimitOrders(){
   }catch(e){}
 }
 async function cancelOrder(id){ try{ await fetch('/api/paper/limit-order/'+id,{method:'DELETE'}); loadLimitOrders(); }catch(e){} }
+async function deleteTrade(id){ try{ await fetch('/api/paper/trade/'+id,{method:'DELETE'}); loadPaper(); }catch(e){} }
 
 function paperSellFor(mint){ const pos=_paperPositions?.[mint]; if(!pos) return alert('position not found'); openSellModal(mint, pos.symbol, pos.entry_price, pos.amount, pos.current_price||pos.entry_price); }
 let _paperPositions={};
